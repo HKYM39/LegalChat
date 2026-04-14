@@ -6,12 +6,38 @@ All Skills, code generation, and design decisions must follow this document.
 
 ---
 
+## 0. Language Policy (Strict)
+
+All OpenSpec artifacts MUST be written in Simplified Chinese.
+
+This includes:
+
+- proposal.md
+- spec.md
+- design.md
+- tasks.md
+
+Requirements:
+
+- All section titles must be in Chinese
+- All descriptions, requirements, and acceptance criteria must be in Chinese
+- English technical terms are allowed only when necessary (e.g. FastAPI, PostgreSQL)
+- No full English sentences are allowed
+
+Non-compliance:
+
+- Any artifact written in English must be rewritten into Chinese before proceeding
+
+This rule applies to ALL agents (Codex, Gemini, etc.)
+
+---
+
 ## 1. Project Overview
 
 This project is a **legal casebase search engine MVP** built with:
 
 - Frontend: Next.js 15 + React 19 + Tailwind + MUI
-- Backend: Python FastAPI (single backend)
+- Backend: Hono
 - Database: PostgreSQL
 - Vector DB: Pinecone
 - AI: LLM + RAG
@@ -55,8 +81,9 @@ DO NOT implement:
 
 ### 3.1 Backend
 
-- Python ONLY
-- FastAPI is the only backend service
+- TypeScript Only
+- Hono is the only backend service
+- Using Skills "legal-rag-hono-backend"
 - DO NOT introduce Node.js backend or API gateway
 - DO NOT split backend into microservices
 
