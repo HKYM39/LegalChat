@@ -1,21 +1,48 @@
-```txt
-npm install
-npm run dev
+## API Surface
+
+- `GET /health`
+- `GET /search?q=...`
+- `POST /ask`
+- `GET /documents/:documentId`
+- `GET /documents/:documentId/paragraphs`
+
+## Local Run
+
+```bash
+pnpm install
+cp apps/api/.env.example apps/api/.env
+pnpm --filter api dev
 ```
 
-```txt
-npm run deploy
+## Typecheck / Test
+
+```bash
+pnpm --filter api typecheck
+pnpm --filter api test
 ```
 
-[For generating/synchronizing types based on your Worker configuration run](https://developers.cloudflare.com/workers/wrangler/commands/#types):
+## Search Request
 
-```txt
-npm run cf-typegen
+`GET /search` supports:
+
+- `q`
+- `court`
+- `jurisdiction`
+- `document_type`
+- `date_from`
+- `date_to`
+- `top_k`
+
+## Ask Request
+
+```json
+{
+  "query": "What did the court say about proportionality?",
+  "topK": 5,
+  "filters": {
+    "court": "Supreme Court of Canada"
+  }
+}
 ```
 
-Pass the `CloudflareBindings` as generics when instantiation `Hono`:
-
-```ts
-// src/index.ts
-const app = new Hono<{ Bindings: CloudflareBindings }>()
-```
+The response includes grounded `authorities`, `supportingExcerpts`, `limitations`, `documentId`, `chunkId`, and paragraph ranges for traceability.

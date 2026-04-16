@@ -16,7 +16,8 @@
   "dependencies": {
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
-    "postgres": "^3.4.7"
+    "postgres": "^3.4.7",
+    "shared": "workspace:*"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.10",

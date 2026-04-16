@@ -1,17 +1,5 @@
-import { db, schema } from "db";
-import { Hono } from "hono";
+import { createApp } from "./app";
 
-const app = new Hono();
-
-app.get("/", (c) => {
-  return c.json({
-    ok: true,
-    dbLinked: Boolean(db),
-    schemaLinked:
-      Boolean(schema.legalDocuments) &&
-      Boolean(schema.retrievalRuns) &&
-      Boolean(schema.legalDocumentsRelations),
-  });
-});
+const app = createApp();
 
 export default app;

@@ -1,0 +1,363 @@
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  ilike,
+  inArray,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
+
+import type { SearchFilters } from "../../../shared/src/index.ts";
+
+import type { db as dbClient } from "../client";
+import {
+  answerCitations,
+  answerSessions,
+  legalDocumentChunks,
+  legalDocumentParagraphs,
+  legalDocuments,
+  retrievalCandidates,
+  retrievalRuns,
+  searchQueries,
+} from "../schema";
+
+type Database = NonNullable<typeof dbClient>;
+
+export type LexicalSearchRow = {
+  documentId: string;
+  chunkId: string;
+  title: string;
+  neutralCitation: string | null;
+  court: string | null;
+  jurisdiction: string | null;
+  documentType: string;
+  decisionDate: string | null;
+  snippet: string;
+  score: number;
+  paragraphStartNo: number | null;
+  paragraphEndNo: number | null;
+};
+
+export type DocumentDetailRow = {
+  documentId: string;
+  title: string;
+  neutralCitation: string | null;
+  parallelCitation: string | null;
+  court: string | null;
+  jurisdiction: string | null;
+  documentType: string;
+  decisionDate: string | null;
+  docketNumber: string | null;
+  summaryText: string | null;
+  sourceUrl: string | null;
+  parseStatus: string;
+  indexingStatus: string;
+};
+
+export type ParagraphRow = {
+  id: string;
+  documentId: string;
+  paragraphNo: number | null;
+  paragraphOrder: number;
+  paragraphText: string;
+};
+
+export function createLegalResearchRepository(database: Database) {
+  function buildFilters(filters: SearchFilters) {
+    const clauses = [eq(legalDocuments.isActive, true)];
+
+    if (filters.court) {
+      clauses.push(eq(legalDocuments.court, filters.court));
+    }
+    if (filters.jurisdiction) {
+      clauses.push(eq(legalDocuments.jurisdiction, filters.jurisdiction));
+    }
+    if (filters.documentType) {
+      clauses.push(eq(legalDocuments.documentType, filters.documentType));
+    }
+    if (filters.dateFrom) {
+      clauses.push(gte(legalDocuments.decisionDate, filters.dateFrom));
+    }
+    if (filters.dateTo) {
+      clauses.push(lte(legalDocuments.decisionDate, filters.dateTo));
+    }
+
+    return and(...clauses);
+  }
+
+  return {
+    async lexicalSearch(input: {
+      normalizedQuery: string;
+      filters: SearchFilters;
+      limit: number;
+    }): Promise<LexicalSearchRow[]> {
+      const likeQuery = `%${input.normalizedQuery}%`;
+      const score = sql<number>`
+        (
+          CASE
+            WHEN ${legalDocuments.neutralCitation} ILIKE ${likeQuery} THEN 5
+            ELSE 0
+          END
+          +
+          CASE
+            WHEN ${legalDocuments.title} ILIKE ${likeQuery} THEN 3
+            ELSE 0
+          END
+          +
+          CASE
+            WHEN ${legalDocumentChunks.chunkText} ILIKE ${likeQuery} THEN 2
+            ELSE 0
+          END
+        )
+      `;
+
+      const rows = await database
+        .select({
+          documentId: legalDocuments.id,
+          chunkId: legalDocumentChunks.id,
+          vectorId: legalDocumentChunks.vectorId,
+          title: legalDocuments.title,
+          neutralCitation: legalDocuments.neutralCitation,
+          court: legalDocuments.court,
+          jurisdiction: legalDocuments.jurisdiction,
+          documentType: legalDocuments.documentType,
+          decisionDate: legalDocuments.decisionDate,
+          snippet: legalDocumentChunks.chunkText,
+          score,
+          paragraphStartNo: legalDocumentChunks.paragraphStartNo,
+          paragraphEndNo: legalDocumentChunks.paragraphEndNo,
+        })
+        .from(legalDocumentChunks)
+        .innerJoin(
+          legalDocuments,
+          eq(legalDocumentChunks.documentId, legalDocuments.id),
+        )
+        .where(
+          and(
+            buildFilters(input.filters),
+            eq(legalDocumentChunks.isActive, true),
+            or(
+              ilike(legalDocuments.neutralCitation, likeQuery),
+              ilike(legalDocuments.title, likeQuery),
+              ilike(legalDocumentChunks.chunkText, likeQuery),
+            ),
+          ),
+        )
+        .orderBy(desc(score), asc(legalDocuments.decisionDate))
+        .limit(input.limit);
+
+      return rows.map((row) => ({
+        ...row,
+        score: Number(row.score ?? 0),
+      }));
+    },
+
+    async findChunksByVectorIds(vectorIds: string[]): Promise<LexicalSearchRow[]> {
+      if (vectorIds.length === 0) {
+        return [];
+      }
+
+      const rows = await database
+        .select({
+          documentId: legalDocuments.id,
+          chunkId: legalDocumentChunks.id,
+          title: legalDocuments.title,
+          neutralCitation: legalDocuments.neutralCitation,
+          court: legalDocuments.court,
+          jurisdiction: legalDocuments.jurisdiction,
+          documentType: legalDocuments.documentType,
+          decisionDate: legalDocuments.decisionDate,
+          snippet: legalDocumentChunks.chunkText,
+          score: sql<number>`0`,
+          paragraphStartNo: legalDocumentChunks.paragraphStartNo,
+          paragraphEndNo: legalDocumentChunks.paragraphEndNo,
+        })
+        .from(legalDocumentChunks)
+        .innerJoin(
+          legalDocuments,
+          eq(legalDocumentChunks.documentId, legalDocuments.id),
+        )
+        .where(
+          and(
+            eq(legalDocumentChunks.isActive, true),
+            inArray(legalDocumentChunks.vectorId, vectorIds),
+          ),
+        );
+
+      const order = new Map(vectorIds.map((value, index) => [value, index]));
+      return rows.sort((left, right) => {
+        const leftRank = order.get(left.vectorId ?? "") ?? Number.MAX_SAFE_INTEGER;
+        const rightRank =
+          order.get(right.vectorId ?? "") ?? Number.MAX_SAFE_INTEGER;
+        return leftRank - rightRank;
+      }).map(({ vectorId: _vectorId, ...row }) => row);
+    },
+
+    async getDocumentById(documentId: string): Promise<DocumentDetailRow | null> {
+      const [row] = await database
+        .select({
+          documentId: legalDocuments.id,
+          title: legalDocuments.title,
+          neutralCitation: legalDocuments.neutralCitation,
+          parallelCitation: legalDocuments.parallelCitation,
+          court: legalDocuments.court,
+          jurisdiction: legalDocuments.jurisdiction,
+          documentType: legalDocuments.documentType,
+          decisionDate: legalDocuments.decisionDate,
+          docketNumber: legalDocuments.docketNumber,
+          summaryText: legalDocuments.summaryText,
+          sourceUrl: legalDocuments.sourceUrl,
+          parseStatus: legalDocuments.parseStatus,
+          indexingStatus: legalDocuments.indexingStatus,
+        })
+        .from(legalDocuments)
+        .where(eq(legalDocuments.id, documentId))
+        .limit(1);
+
+      return row ?? null;
+    },
+
+    async getDocumentParagraphs(documentId: string): Promise<ParagraphRow[]> {
+      return database
+        .select({
+          id: legalDocumentParagraphs.id,
+          documentId: legalDocumentParagraphs.documentId,
+          paragraphNo: legalDocumentParagraphs.paragraphNo,
+          paragraphOrder: legalDocumentParagraphs.paragraphOrder,
+          paragraphText: legalDocumentParagraphs.paragraphText,
+        })
+        .from(legalDocumentParagraphs)
+        .where(eq(legalDocumentParagraphs.documentId, documentId))
+        .orderBy(asc(legalDocumentParagraphs.paragraphOrder));
+    },
+
+    async insertSearchQuery(input: {
+      conversationId?: string;
+      messageId?: string;
+      queryText: string;
+      normalizedQuery: string;
+      queryType: string;
+      filtersJson: SearchFilters;
+      latencyMs?: number;
+    }): Promise<string | null> {
+      const [row] = await database
+        .insert(searchQueries)
+        .values({
+          conversationId: input.conversationId,
+          messageId: input.messageId,
+          queryText: input.queryText,
+          normalizedQuery: input.normalizedQuery,
+          queryType: input.queryType,
+          filtersJson: input.filtersJson,
+          latencyMs: input.latencyMs,
+        })
+        .returning({ id: searchQueries.id });
+
+      return row?.id ?? null;
+    },
+
+    async insertRetrievalRun(input: {
+      queryId: string;
+      retrievalStrategy: string;
+      metadataFiltersJson: SearchFilters;
+      denseTopK: number;
+      lexicalTopK: number;
+      fusedTopK: number;
+      latencyMs?: number;
+      debugPayload?: Record<string, unknown>;
+    }): Promise<string | null> {
+      const [row] = await database
+        .insert(retrievalRuns)
+        .values({
+          queryId: input.queryId,
+          retrievalStrategy: input.retrievalStrategy,
+          denseModelName: "text-embedding-004",
+          lexicalEngine: "postgres_ilike",
+          metadataFiltersJson: input.metadataFiltersJson,
+          denseTopK: input.denseTopK,
+          lexicalTopK: input.lexicalTopK,
+          fusedTopK: input.fusedTopK,
+          latencyMs: input.latencyMs,
+          debugPayload: input.debugPayload,
+        })
+        .returning({ id: retrievalRuns.id });
+
+      return row?.id ?? null;
+    },
+
+    async insertRetrievalCandidates(
+      input: Array<{
+        retrievalRunId: string;
+        chunkId: string;
+        documentId: string;
+        sourceRankDense?: number;
+        sourceRankLexical?: number;
+        fusedRank?: number;
+        rerankedRank?: number;
+        denseScore?: number;
+        lexicalScore?: number;
+        fusedScore?: number;
+        rerankedScore?: number;
+        selectedForAnswer: boolean;
+      }>,
+    ): Promise<void> {
+      if (input.length === 0) {
+        return;
+      }
+
+      await database.insert(retrievalCandidates).values(input);
+    },
+
+    async insertAnswerSession(input: {
+      queryId?: string | null;
+      retrievalRunId?: string | null;
+      answerText: string;
+      answerJson: Record<string, unknown>;
+      validationStatus: string;
+      latencyMs?: number;
+    }): Promise<string | null> {
+      const [row] = await database
+        .insert(answerSessions)
+        .values({
+          queryId: input.queryId,
+          retrievalRunId: input.retrievalRunId,
+          modelProvider: "gemini",
+          modelName: "gemini-2.5-flash",
+          promptVersion: "rag-v1",
+          answerText: input.answerText,
+          answerJson: input.answerJson,
+          validationStatus: input.validationStatus,
+          streamCompleted: true,
+          latencyMs: input.latencyMs,
+          confidenceLabel:
+            input.validationStatus === "grounded" ? "medium" : "low",
+        })
+        .returning({ id: answerSessions.id });
+
+      return row?.id ?? null;
+    },
+
+    async insertAnswerCitations(
+      input: Array<{
+        answerSessionId: string;
+        chunkId: string;
+        documentId: string;
+        citationLabel: string;
+        paragraphStartNo: number | null;
+        paragraphEndNo: number | null;
+        supportingExcerpt: string;
+        citationOrder: number;
+      }>,
+    ): Promise<void> {
+      if (input.length === 0) {
+        return;
+      }
+
+      await database.insert(answerCitations).values(input);
+    },
+  };
+}

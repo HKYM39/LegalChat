@@ -1,0 +1,15 @@
+{
+  "name": "shared",
+  "version": "1.0.0",
+  "description": "Shared request and response contracts for the LegalChat workspace",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsx --tsconfig ./tsconfig.json --eval \"import('./src/index.ts').then(() => console.log('shared-typecheck-ok'))\""
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}
