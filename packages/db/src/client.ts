@@ -1,21 +1,31 @@
-import "dotenv/config";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 
 import * as schema from "./schema";
 
-const connectionString = process.env.DATABASE_URL;
+function readDatabaseUrl() {
+  return process.env.DATABASE_URL;
+}
 
-export const sql = connectionString
-  ? postgres(connectionString, {
-      max: 10,
-    })
-  : null;
+export function createDbClient(connectionString = readDatabaseUrl()) {
+  if (!connectionString) {
+    return null;
+  }
 
-export const db = sql
-  ? drizzle(sql, {
-      schema,
-    })
-  : null;
+  const sql = postgres(connectionString, {
+    max: 1,
+  });
+  const db = drizzle(sql, {
+    schema,
+  });
 
-export const hasDatabaseUrl = Boolean(connectionString);
+  return {
+    sql,
+    db,
+  };
+}
+
+export type DatabaseClient = NonNullable<ReturnType<typeof createDbClient>>;
+export type Database = DatabaseClient["db"];
+
+export const hasDatabaseUrl = Boolean(readDatabaseUrl());

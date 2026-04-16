@@ -20,22 +20,6 @@ class ParagraphRecord:
 
 
 @dataclass(slots=True)
-class ChunkRecord:
-    id: str
-    document_id: str
-    chunk_index: int
-    chunk_type: str
-    chunk_text: str
-    paragraph_start_no: int | None
-    paragraph_end_no: int | None
-    heading_path: str | None
-    token_count: int
-    paragraph_ids: list[str]
-    chunk_metadata: dict[str, Any] = field(default_factory=dict)
-    section_id: str | None = None
-
-
-@dataclass(slots=True)
 class NormalizedDocument:
     id: str
     source_path: str
@@ -60,7 +44,6 @@ class NormalizedDocument:
     parse_status: str
     indexing_status: str
     paragraphs: list[ParagraphRecord]
-    chunks: list[ChunkRecord]
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:

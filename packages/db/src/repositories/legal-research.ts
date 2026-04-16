@@ -13,7 +13,7 @@ import {
 
 import type { SearchFilters } from "../../../shared/src/index.ts";
 
-import type { db as dbClient } from "../client";
+import type { Database } from "../client";
 import {
   answerCitations,
   answerSessions,
@@ -24,8 +24,6 @@ import {
   retrievalRuns,
   searchQueries,
 } from "../schema";
-
-type Database = NonNullable<typeof dbClient>;
 
 export type LexicalSearchRow = {
   documentId: string;
@@ -275,7 +273,7 @@ export function createLegalResearchRepository(database: Database) {
         .values({
           queryId: input.queryId,
           retrievalStrategy: input.retrievalStrategy,
-          denseModelName: "text-embedding-004",
+          denseModelName: "gemini-embedding-001",
           lexicalEngine: "postgres_ilike",
           metadataFiltersJson: input.metadataFiltersJson,
           denseTopK: input.denseTopK,

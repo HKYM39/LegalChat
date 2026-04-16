@@ -1,26 +1,102 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --surface-0: #f6f7fb;
+  --surface-1: rgba(255, 255, 255, 0.86);
+  --surface-2: #ffffff;
+  --surface-3: #eef2ff;
+  --surface-4: #e8edf8;
+  --line-soft: rgba(109, 122, 148, 0.18);
+  --line-strong: rgba(71, 85, 105, 0.22);
+  --ink-950: #1d2738;
+  --ink-700: #566274;
+  --ink-500: #8692a8;
+  --brand-500: #7ea5ff;
+  --brand-600: #5c87ee;
+  --brand-700: #416ad2;
+  --success-500: #1e8f68;
+  --danger-500: #cc4f53;
+  --shadow-card: 0 16px 42px rgba(98, 114, 143, 0.08);
+  --shadow-soft: 0 10px 28px rgba(77, 93, 118, 0.08);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: var(--surface-0);
+  --color-foreground: var(--ink-950);
+  --font-sans:
+    "Avenir Next", "Segoe UI", "Helvetica Neue", "Noto Sans", sans-serif;
+  --font-mono:
+    "SFMono-Regular", "IBM Plex Mono", "Menlo", "Consolas", monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top, rgba(126, 165, 255, 0.2), transparent 30%),
+    linear-gradient(180deg, #f7f8fc 0%, #f3f5f9 52%, #eef1f7 100%);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  min-height: 100vh;
+  margin: 0;
+  color: var(--ink-950);
+  font-family:
+    "Avenir Next", "Segoe UI", "Helvetica Neue", "Noto Sans", sans-serif;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(92, 135, 238, 0.18);
+}
+
+.glass-panel {
+  background: var(--surface-1);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-card);
+}
+
+.paper-panel {
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-soft);
+}
+
+.balanced-text {
+  text-wrap: balance;
+}
+
+.brand-orb {
+  position: relative;
+  overflow: hidden;
+}
+
+.brand-orb::after {
+  content: "";
+  position: absolute;
+  inset: -40% -15% auto auto;
+  width: 80%;
+  aspect-ratio: 1;
+  border-radius: 999px;
+  background: radial-gradient(
+    circle,
+    rgba(126, 165, 255, 0.36),
+    transparent 72%
+  );
+  pointer-events: none;
 }

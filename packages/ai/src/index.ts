@@ -37,13 +37,17 @@ export type PromptEvidence = {
 export type AnswerModelResult = {
   answerText: string;
   limitations: string[];
-  supportingExcerpts: SupportingExcerpt[];
+  supportingExcerpts: Array<{
+    label: string;
+    excerpt: string;
+  }>;
 };
 
 export type GeminiConfig = {
   apiKey?: string;
   model: string;
   embeddingModel: string;
+  embeddingOutputDimensionality?: number;
   apiBaseUrl: string;
 };
 
@@ -267,6 +271,11 @@ export async function embedQuery(
           content: {
             parts: [{ text: query }],
           },
+          ...(config.embeddingOutputDimensionality
+            ? {
+                outputDimensionality: config.embeddingOutputDimensionality,
+              }
+            : {}),
         }),
       },
     );
@@ -286,8 +295,19 @@ export async function embedQuery(
 }
 
 function parseGeminiJson(text: string): AnswerModelResult | null {
+  const normalizedText = text
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
   try {
-    const parsed = JSON.parse(text) as Partial<AnswerModelResult>;
+    const parsed = JSON.parse(normalizedText) as
+      | Partial<AnswerModelResult>
+      | {
+          answerText?: unknown;
+          limitations?: unknown;
+          supportingExcerpts?: unknown;
+        };
     if (!parsed || typeof parsed.answerText !== "string") {
       return null;
     }
@@ -295,17 +315,26 @@ function parseGeminiJson(text: string): AnswerModelResult | null {
       answerText: parsed.answerText.trim(),
       limitations: Array.isArray(parsed.limitations)
         ? parsed.limitations.filter((item): item is string => typeof item === "string")
-        : [],
+        : typeof parsed.limitations === "string" && parsed.limitations.trim()
+          ? [parsed.limitations.trim()]
+          : [],
       supportingExcerpts: Array.isArray(parsed.supportingExcerpts)
-        ? parsed.supportingExcerpts.filter(
-            (item): item is SupportingExcerpt =>
-              Boolean(item) &&
+        ? parsed.supportingExcerpts.flatMap((item) => {
+            if (
+              item &&
               typeof item === "object" &&
-              typeof (item as SupportingExcerpt).label === "string" &&
-              typeof (item as SupportingExcerpt).excerpt === "string" &&
-              Boolean((item as SupportingExcerpt).traceability?.documentId) &&
-              Boolean((item as SupportingExcerpt).traceability?.chunkId),
-          )
+              typeof (item as { label?: unknown }).label === "string" &&
+              typeof (item as { excerpt?: unknown }).excerpt === "string"
+            ) {
+              return [
+                {
+                  label: (item as { label: string }).label,
+                  excerpt: (item as { excerpt: string }).excerpt,
+                },
+              ];
+            }
+            return [];
+          })
         : [],
     };
   } catch {
@@ -424,16 +453,25 @@ export function buildAskResponse(input: {
     });
   }
 
-  const traceabilityByChunkId = new Map(
-    input.authorities.map((authority) => [authority.chunkId, authority.traceability]),
+  const traceabilityByLabel = new Map(
+    input.authorities.map((authority, index) => [
+      `A${index + 1}`,
+      authority.traceability,
+    ]),
   );
-  const supportingExcerpts = input.answer.supportingExcerpts.filter((item) =>
-    Array.from(traceabilityByChunkId.values()).some(
-      (traceability) =>
-        traceability.chunkId === item.traceability.chunkId &&
-        traceability.documentId === item.traceability.documentId,
-    ),
-  );
+  const supportingExcerpts = input.answer.supportingExcerpts.flatMap((item) => {
+    const traceability = traceabilityByLabel.get(item.label);
+    if (!traceability) {
+      return [];
+    }
+    return [
+      {
+        label: item.label,
+        excerpt: item.excerpt,
+        traceability,
+      },
+    ];
+  });
 
   if (supportingExcerpts.length === 0) {
     return buildConservativeAnswer({

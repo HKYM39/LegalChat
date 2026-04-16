@@ -4,13 +4,12 @@ import hashlib
 import json
 import logging
 import re
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 from tools.legal_importer.config import PipelineConfig
-from tools.legal_importer.models import ChunkRecord, NormalizedDocument, ParagraphRecord
+from tools.legal_importer.models import NormalizedDocument, ParagraphRecord
 from tools.legal_importer.pdf import extract_pdf_text
 
 LOGGER = logging.getLogger(__name__)
@@ -32,7 +31,6 @@ def normalize_document(pdf_path: Path, config: PipelineConfig) -> NormalizedDocu
     cleaned_text = clean_raw_text(raw_text)
     metadata = derive_metadata(pdf_path, cleaned_text, config.root_dir)
     paragraphs = build_paragraphs(metadata["document_id"], cleaned_text)
-    chunks = build_chunks(metadata["document_id"], paragraphs, config)
 
     return NormalizedDocument(
         id=metadata["document_id"],
@@ -58,8 +56,7 @@ def normalize_document(pdf_path: Path, config: PipelineConfig) -> NormalizedDocu
         parse_status="completed",
         indexing_status="pending",
         paragraphs=paragraphs,
-        chunks=chunks,
-        warnings=collect_warnings(cleaned_text, paragraphs, chunks),
+        warnings=collect_warnings(cleaned_text, paragraphs),
     )
 
 
@@ -262,108 +259,9 @@ def is_heading_like(block: str) -> bool:
     }
 
 
-def build_chunks(
-    document_id: str,
-    paragraphs: list[ParagraphRecord],
-    config: PipelineConfig,
-) -> list[ChunkRecord]:
-    chunks: list[ChunkRecord] = []
-    current_group: list[ParagraphRecord] = []
-
-    def flush_group() -> None:
-        if not current_group:
-            return
-        chunk_index = len(chunks)
-        chunk_text = "\n\n".join(
-            format_paragraph_for_chunk(paragraph) for paragraph in current_group
-        )
-        paragraph_numbers = [p.paragraph_no for p in current_group if p.paragraph_no is not None]
-        paragraph_start_no = paragraph_numbers[0] if paragraph_numbers else None
-        paragraph_end_no = paragraph_numbers[-1] if paragraph_numbers else None
-        chunk_id = str(
-            uuid5(
-                NAMESPACE_URL,
-                (
-                    f"chunk:{document_id}:{chunk_index}:{paragraph_start_no}:"
-                    f"{paragraph_end_no}:{chunk_text}"
-                ),
-            )
-        )
-        chunks.append(
-            ChunkRecord(
-                id=chunk_id,
-                document_id=document_id,
-                chunk_index=chunk_index,
-                chunk_type="paragraph_group",
-                chunk_text=chunk_text,
-                paragraph_start_no=paragraph_start_no,
-                paragraph_end_no=paragraph_end_no,
-                heading_path=select_heading_path(current_group),
-                token_count=estimate_tokens(chunk_text),
-                paragraph_ids=[paragraph.id for paragraph in current_group],
-                chunk_metadata={
-                    "paragraph_orders": [paragraph.paragraph_order for paragraph in current_group],
-                    "paragraph_count": len(current_group),
-                },
-            )
-        )
-        current_group.clear()
-
-    for paragraph in paragraphs:
-        if should_flush_before_append(current_group, paragraph, config):
-            flush_group()
-        current_group.append(paragraph)
-        if should_flush_after_append(current_group, config):
-            flush_group()
-
-    flush_group()
-    return chunks
-
-
-def should_flush_before_append(
-    current_group: list[ParagraphRecord],
-    next_paragraph: ParagraphRecord,
-    config: PipelineConfig,
-) -> bool:
-    if not current_group:
-        return False
-    current_chars = sum(len(item.paragraph_text) for item in current_group)
-    if current_group[-1].heading_path != next_paragraph.heading_path and len(current_group) >= 2:
-        return True
-    return current_chars + len(next_paragraph.paragraph_text) > config.chunk_char_soft_limit
-
-
-def should_flush_after_append(
-    current_group: list[ParagraphRecord],
-    config: PipelineConfig,
-) -> bool:
-    if not current_group:
-        return False
-    if len(current_group) >= config.chunk_paragraph_max:
-        return True
-    if len(current_group) >= config.chunk_paragraph_target:
-        joined_length = sum(len(item.paragraph_text) for item in current_group)
-        return joined_length >= config.chunk_char_soft_limit
-    return len(current_group) == 1 and len(current_group[0].paragraph_text) >= 1800
-
-
-def format_paragraph_for_chunk(paragraph: ParagraphRecord) -> str:
-    if paragraph.paragraph_no is None:
-        return paragraph.paragraph_text
-    return f"[{paragraph.paragraph_no}] {paragraph.paragraph_text}"
-
-
-def select_heading_path(paragraphs: list[ParagraphRecord]) -> str | None:
-    for paragraph in paragraphs:
-        if paragraph.heading_path:
-            return paragraph.heading_path
-    return None
-
-
 def collect_warnings(
     cleaned_text: str,
     paragraphs: list[ParagraphRecord],
-    chunks: list[ChunkRecord],
 ) -> list[str]:
     warnings: list[str] = []
     if not cleaned_text:
@@ -372,13 +270,6 @@ def collect_warnings(
         warnings.append("未识别到段落")
     if paragraphs and any(not paragraph.paragraph_text for paragraph in paragraphs):
         warnings.append("存在空段落文本")
-    if chunks and any(
-        chunk.paragraph_start_no is not None
-        and chunk.paragraph_end_no is not None
-        and chunk.paragraph_start_no > chunk.paragraph_end_no
-        for chunk in chunks
-    ):
-        warnings.append("存在非法 chunk 段落范围")
     return warnings
 
 
@@ -393,26 +284,12 @@ def sha256_hex(value: str) -> str:
 def ensure_output_dirs(config: PipelineConfig) -> None:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     config.normalized_dir.mkdir(parents=True, exist_ok=True)
-    config.chunks_dir.mkdir(parents=True, exist_ok=True)
 
 
 def write_document_artifacts(document: NormalizedDocument, config: PipelineConfig) -> None:
     normalized_path = config.normalized_dir / f"{document.id}.json"
-    chunk_path = config.chunks_dir / f"{document.id}.json"
     normalized_path.write_text(
         json.dumps(document.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    chunk_path.write_text(
-        json.dumps(
-            {
-                "document_id": document.id,
-                "title": document.title,
-                "chunks": [asdict(chunk) for chunk in document.chunks],
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
         encoding="utf-8",
     )
     LOGGER.debug("Wrote artifacts for %s", document.source_path)

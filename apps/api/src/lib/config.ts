@@ -8,10 +8,18 @@ export type AppConfig = {
   geminiApiKey?: string;
   geminiModel: string;
   geminiEmbeddingModel: string;
+  geminiEmbeddingOutputDimensionality?: number;
   geminiApiBaseUrl: string;
   defaultTopK: number;
   requestLogEnabled: boolean;
 };
+
+function normalizeGeminiEmbeddingModel(value?: string): string {
+  if (!value || value === "text-embedding-004") {
+    return "gemini-embedding-001";
+  }
+  return value;
+}
 
 function readEnv(name: string): string | undefined {
   const value =
@@ -38,8 +46,13 @@ export function loadConfig(): AppConfig {
     pineconeNamespace: readEnv("PINECONE_NAMESPACE"),
     geminiApiKey: readEnv("GEMINI_API_KEY"),
     geminiModel: readEnv("GEMINI_MODEL") ?? "gemini-2.5-flash",
-    geminiEmbeddingModel:
-      readEnv("GEMINI_EMBEDDING_MODEL") ?? "text-embedding-004",
+    geminiEmbeddingModel: normalizeGeminiEmbeddingModel(
+      readEnv("GEMINI_EMBEDDING_MODEL"),
+    ),
+    geminiEmbeddingOutputDimensionality: readNumberEnv(
+      "GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY",
+      1024,
+    ),
     geminiApiBaseUrl:
       readEnv("GEMINI_API_BASE_URL") ?? "https://generativelanguage.googleapis.com/v1beta",
     defaultTopK: readNumberEnv("DEFAULT_TOP_K", 8),

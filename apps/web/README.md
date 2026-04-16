@@ -1,36 +1,72 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# CaseBase AI Web
 
-## Getting Started
+`apps/web` 是法律案例研究助手的前端应用，基于 Next.js App Router 构建，承载 chat-first 对话页和案件详情核验页。
 
-First, run the development server:
+## 页面范围
+
+- `/`
+  对话式法律研究主页面，展示空状态欢迎区、suggested prompts、用户消息、assistant 回答、authority cards、supporting excerpts 与 limitations。
+- `/documents/[documentId]`
+  案件详情与段落阅读页面，用于从聊天引用跳转后核验 canonical metadata 与原文段落。
+
+## 技术栈
+
+- Next.js 16
+- React 19
+- TypeScript
+- Tailwind CSS 4
+- Material UI
+- Zustand
+- `shared` workspace 类型契约
+
+## 环境变量
+
+复制 `.env.example` 到 `.env.local`：
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp apps/web/.env.example apps/web/.env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+可用变量：
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- `API_BASE_URL`
+  Next.js 服务器转发到 Hono API 的基础地址。未配置时，开发环境会自动探测 `http://127.0.0.1:8787-8795` 中可用的 Wrangler 端口。
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 本地运行
 
-## Learn More
+在仓库根目录执行：
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+pnpm --filter web dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+默认会启动在 `http://localhost:3000`。
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+如果同时需要联调后端：
 
-## Deploy on Vercel
+```bash
+pnpm --filter api dev
+pnpm --filter web dev
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 校验命令
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+pnpm --filter web typecheck
+pnpm --filter web lint
+pnpm --filter web test
+```
+
+## API 对接
+
+前端直接消费以下接口：
+
+- `GET /health`
+- `GET /search`
+- `POST /ask`
+- `GET /documents/:documentId`
+- `GET /documents/:documentId/paragraphs`
+
+其中 `/ask` 是主交互入口，authority card 点击后会跳转到 `/documents/[documentId]` 并尝试根据段落范围定位引用内容。
+
+为避免浏览器跨域和 Wrangler 端口漂移问题，前端通过 Next.js 同源 `/api/*` 代理转发到后端。

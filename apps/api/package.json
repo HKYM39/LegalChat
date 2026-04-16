@@ -5,13 +5,16 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "offline:index": "tsx --tsconfig ./tsconfig.json ./Script/offline-index.ts",
     "typecheck": "tsx --tsconfig ./tsconfig.json --eval \"import('./src/index.ts').then(() => console.log('api-typecheck-ok'))\"",
     "test": "tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "ai": "workspace:*",
     "db": "workspace:*",
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.12.12",
+    "postgres": "^3.4.7",
     "shared": "workspace:*"
   },
   "devDependencies": {

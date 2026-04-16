@@ -14,6 +14,33 @@ cp apps/api/.env.example apps/api/.env
 pnpm --filter api dev
 ```
 
+## Offline Indexing
+
+Python normalization and TypeScript indexing are intentionally separated:
+
+- Python: `python3 -m tools.legal_importer`
+- TypeScript indexing: `pnpm --filter api offline:index`
+
+The TypeScript indexer lives in `apps/api/Script/` and reads normalized files
+from `tools/output/normalized/` by default. It is responsible for:
+
+- rebuilding legal-aware chunks from paragraph structure
+- writing `legal_documents`, `legal_document_paragraphs`, and `legal_document_chunks`
+- generating embeddings
+- upserting Pinecone vectors
+
+Set `GEMINI_EMBEDDING_OUTPUT_DIMENSIONALITY` to match the Pinecone index
+dimension. In the current local setup, the index uses `1024`.
+
+Useful indexing commands:
+
+```bash
+pnpm --filter api offline:index -- --limit 1 --verbose
+pnpm --filter api offline:index -- --document-id <document-id> --only-missing-vectors
+pnpm --filter api offline:index -- --document-id <document-id> --skip-pinecone
+pnpm --filter api offline:index -- --document-id <document-id> --force-reembed
+```
+
 ## Typecheck / Test
 
 ```bash
