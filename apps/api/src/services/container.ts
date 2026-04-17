@@ -1,3 +1,12 @@
+/**
+ * 服务容器 (Service Container)
+ * 
+ * 职责：
+ * 1. 核心业务逻辑的聚合层，协调 AI 层 (packages/ai) 与数据访问层 (packages/db)。
+ * 2. 实现 RAG (Retrieval-Augmented Generation) 完整生命周期。
+ * 3. 管理外部服务（如 Pinecone, Gemini）的调用与降级逻辑。
+ * 4. 提供依赖注入的入口，便于单元测试。
+ */
 import {
   buildAskResponse,
   buildPromptEvidence,
@@ -24,12 +33,23 @@ import type {
 } from "../../../../packages/shared/src/index.ts";
 
 import { AppError } from "../lib/errors";
+import { InMemoryChatRateLimiter } from "../lib/chat-rate-limit";
 import { configHealth, type AppConfig } from "../lib/config";
 
+/**
+ * 对话执行上下文
+ */
+type AskExecutionContext = {
+  rateLimitSubject?: string;
+};
+
+/**
+ * 服务容器接口定义
+ */
 export type ServiceContainer = {
   getHealth(): Promise<HealthResponse>;
   runSearch(input: SearchRequest): Promise<SearchResponse>;
-  runAsk(input: AskRequest): Promise<AskResponse>;
+  runAsk(input: AskRequest, context?: AskExecutionContext): Promise<AskResponse>;
   getDocument(documentId: string): Promise<DocumentResponse>;
   getDocumentParagraphs(documentId: string): Promise<DocumentParagraphsResponse>;
 };
@@ -39,6 +59,9 @@ type PineconeMatch = {
   score?: number;
 };
 
+/**
+ * 格式化 Pinecone 基础 URL
+ */
 function pineconeBaseUrl(indexHost: string): string {
   if (indexHost.startsWith("http://") || indexHost.startsWith("https://")) {
     return indexHost.replace(/\/$/, "");
@@ -46,11 +69,15 @@ function pineconeBaseUrl(indexHost: string): string {
   return `https://${indexHost.replace(/\/$/, "")}`;
 }
 
+/**
+ * 调用 Pinecone 执行向量相似度检索
+ */
 async function fetchPineconeMatches(input: {
   config: AppConfig;
   vector: number[] | null;
   topK: number;
 }): Promise<PineconeMatch[]> {
+  // 如果配置缺失或向量生成失败，直接跳过向量检索
   if (
     !input.vector ||
     !input.config.pineconeApiKey ||
@@ -86,10 +113,14 @@ async function fetchPineconeMatches(input: {
     };
     return json.matches ?? [];
   } catch {
+    // 向量库故障时不中断流程，回退到词法检索
     return [];
   }
 }
 
+/**
+ * 将数据库行映射为标准的检索候选对象 (RetrievalCandidate)
+ */
 function mapAuthority(row: {
   documentId: string;
   chunkId: string;
@@ -113,7 +144,7 @@ function mapAuthority(row: {
     jurisdiction: row.jurisdiction,
     documentType: row.documentType,
     decisionDate: row.decisionDate,
-    snippet: row.snippet.slice(0, 600),
+    snippet: row.snippet.slice(0, 600), // 截取片段长度
     score: row.score,
     traceability: {
       documentId: row.documentId,
@@ -124,6 +155,9 @@ function mapAuthority(row: {
   };
 }
 
+/**
+ * 映射文档详情响应
+ */
 function mapDocument(row: DocumentDetailRow): DocumentResponse {
   return {
     documentId: row.documentId,
@@ -142,6 +176,9 @@ function mapDocument(row: DocumentDetailRow): DocumentResponse {
   };
 }
 
+/**
+ * 映射文档段落响应
+ */
 function mapParagraphs(
   documentId: string,
   paragraphs: ParagraphRow[],
@@ -152,7 +189,22 @@ function mapParagraphs(
   };
 }
 
+/**
+ * 创建服务容器实例
+ * 
+ * @param config 应用配置
+ */
 export function createServices(config: AppConfig): ServiceContainer {
+  // 初始化限流器
+  const chatRateLimiter = new InMemoryChatRateLimiter({
+    perMinute: config.chatRateLimitPerMinute,
+    perDay: config.chatRateLimitPerDay,
+    logEnabled: config.requestLogEnabled,
+  });
+
+  /**
+   * 辅助函数：在 Repository 上下文中执行操作并自动管理连接闭合
+   */
   async function withRepository<T>(
     operation: (
       repository: ReturnType<typeof createLegalResearchRepository>,
@@ -167,11 +219,15 @@ export function createServices(config: AppConfig): ServiceContainer {
       const repository = createLegalResearchRepository(client.db);
       return await operation(repository);
     } finally {
+      // 这里的 sql.end 用于无服务器环境下的连接清理，Bun 环境下可按需调整
       await client.sql.end({ timeout: 1 }).catch(() => undefined);
     }
   }
 
   return {
+    /**
+     * 获取系统健康详情
+     */
     async getHealth() {
       const checks = configHealth(config);
       return {
@@ -182,21 +238,30 @@ export function createServices(config: AppConfig): ServiceContainer {
       };
     },
 
+    /**
+     * 执行混合检索 (Lexical + Dense Search)
+     */
     async runSearch(input) {
       return withRepository(async (repository) => {
+        // 1. 生成检索计划 (判定查询类型与分配 TopK)
         const plan = buildRetrievalPlan({
           query: input.query,
           topK: input.topK || config.defaultTopK,
           filters: input.filters,
         });
         const startedAt = Date.now();
+
+        // 2. 执行词法检索 (Lexical/Keyword Search)
         const lexicalRows = await repository.lexicalSearch({
           normalizedQuery: plan.lexicalQuery,
           filters: plan.filters,
           limit: plan.lexicalTopK,
         });
         const lexical = lexicalRows.map(mapAuthority);
+        
         const searchLimitations: string[] = [];
+
+        // 3. 执行向量检索 (Dense/Vector Search)
         const vector = await embedQuery(
           {
             apiKey: config.geminiApiKey,
@@ -208,14 +273,17 @@ export function createServices(config: AppConfig): ServiceContainer {
           },
           plan.normalizedQuery,
         );
+
         if (!vector && config.geminiApiKey) {
           searchLimitations.push("查询向量生成不可用，结果已降级为 lexical-only。");
         }
+
         const matches = await fetchPineconeMatches({
           config,
           vector,
           topK: plan.denseTopK,
         });
+
         if (
           vector &&
           matches.length === 0 &&
@@ -224,6 +292,8 @@ export function createServices(config: AppConfig): ServiceContainer {
         ) {
           searchLimitations.push("向量检索当前不可用，结果已降级为 lexical-only。");
         }
+
+        // 从 DB 获取向量匹配对应的详细内容
         const denseRows = await repository.findChunksByVectorIds(
           matches.map((item) => item.id),
         );
@@ -231,12 +301,15 @@ export function createServices(config: AppConfig): ServiceContainer {
           ...mapAuthority(row),
           score: matches[index]?.score ?? 0,
         }));
+
+        // 4. 融合并重排序 (Lexical + Dense Fusion)
         const merged = mergeAndRerankCandidates({
           lexical,
           dense,
           topK: plan.topK,
         });
 
+        // 5. 记录检索日志 (异步执行，不阻塞返回)
         const queryId = await repository
           .insertSearchQuery({
             queryText: input.query,
@@ -299,15 +372,26 @@ export function createServices(config: AppConfig): ServiceContainer {
       });
     },
 
-    async runAsk(input) {
+    /**
+     * 执行 RAG 对话 (Grounded Answer Synthesis)
+     */
+    async runAsk(input, context) {
+      // 1. 强制执行速率限制
+      chatRateLimiter.enforce(context?.rateLimitSubject ?? "anonymous");
+
+      // 2. 执行混合检索获取证据片段
       const search = await this.runSearch(input);
       const plan = buildRetrievalPlan({
         query: input.query,
         topK: input.topK || config.defaultTopK,
         filters: input.filters,
       });
+
+      // 3. 构建 Prompt 证据上下文
       const promptEvidence = buildPromptEvidence(search.results);
       const modelStartedAt = Date.now();
+
+      // 4. 调用 LLM 生成基于事实的回答
       const answer = await generateGroundedAnswer({
         config: {
           apiKey: config.geminiApiKey,
@@ -318,10 +402,13 @@ export function createServices(config: AppConfig): ServiceContainer {
         query: input.query,
         evidence: promptEvidence,
       });
+
       const askLimitations = [...search.limitations];
       if (!answer && search.results.length > 0 && config.geminiApiKey) {
         askLimitations.push("Gemini 回答生成当前不可用，结果已降级为保守模式。");
       }
+
+      // 5. 构建结构化响应并包含限制说明
       const response = buildAskResponse({
         query: input.query,
         plan,
@@ -333,6 +420,7 @@ export function createServices(config: AppConfig): ServiceContainer {
             : askLimitations,
       });
 
+      // 6. 记录对话与引用日志 (持久化到数据库)
       await withRepository(async (repository) => {
         const queryId = await repository
           .insertSearchQuery({
@@ -414,6 +502,9 @@ export function createServices(config: AppConfig): ServiceContainer {
       return response;
     },
 
+    /**
+     * 获取指定 ID 的文档详情
+     */
     async getDocument(documentId) {
       return withRepository(async (repository) => {
         const row = await repository.getDocumentById(documentId);
@@ -424,6 +515,9 @@ export function createServices(config: AppConfig): ServiceContainer {
       });
     },
 
+    /**
+     * 获取指定文档的所有段落列表
+     */
     async getDocumentParagraphs(documentId) {
       return withRepository(async (repository) => {
         const document = await repository.getDocumentById(documentId);

@@ -48,6 +48,17 @@ pnpm --filter api typecheck
 pnpm --filter api test
 ```
 
+## Chat Rate Limits
+
+`POST /ask` 支持基于环境变量的聊天频率限制：
+
+- `CHAT_RATE_LIMIT_PER_MINUTE`
+  单个匿名聊天主体每分钟最多允许的消息数，默认 `10`
+- `CHAT_RATE_LIMIT_PER_DAY`
+  单个匿名聊天主体每天最多允许的消息数，默认 `100`
+
+当前实现优先使用前端传入的稳定 `conversationId` 作为限流主体；若缺失，则回退到请求 IP。命中限制时，接口会返回 `429` 和结构化错误详情，前端可据此展示明确提示。
+
 ## Search Request
 
 `GET /search` supports:

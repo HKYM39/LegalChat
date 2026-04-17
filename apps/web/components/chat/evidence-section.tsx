@@ -1,3 +1,9 @@
+/**
+ * 支持证据片段组件 (EvidenceSection)
+ * 
+ * 用于在 AI 助手的回答下方渲染支撑其结论的原文片段 (Supporting Excerpts)。
+ * 提供从该片段快速跳转到详情页对应段落的链接。
+ */
 import Link from "next/link";
 import type { SupportingExcerpt } from "shared";
 
@@ -15,7 +21,7 @@ export function EvidenceSection({ excerpts }: EvidenceSectionProps) {
   return (
     <section className="space-y-3">
       <p className="text-[11px] font-medium tracking-[0.18em] text-[var(--ink-500)] uppercase">
-        Supporting Excerpts
+        引用的原段落证据 (Supporting Excerpts)
       </p>
       <div className="space-y-3">
         {excerpts.map((excerpt) => (
@@ -31,10 +37,12 @@ export function EvidenceSection({ excerpts }: EvidenceSectionProps) {
               <span className="rounded-full bg-[var(--surface-3)] px-2.5 py-1 font-mono text-[11px] text-[var(--brand-700)]">
                 {excerpt.label}
               </span>
+              {/* 显示涉及的具体段落编号 (e.g. [45]-[47]) */}
               <span className="font-mono text-[11px] text-[var(--ink-500)]">
                 {formatParagraphRange(excerpt.traceability)}
               </span>
             </div>
+            {/* 具体截取的文本内容 */}
             <p className="text-[13px] leading-6 text-[var(--ink-700)]">
               {excerpt.excerpt}
             </p>

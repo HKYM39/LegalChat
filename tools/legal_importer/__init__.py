@@ -1,2 +1,5 @@
-"""Offline legal PDF normalization and PostgreSQL import pipeline."""
+"""
+离线法律 PDF 标准化处理及 JSON 导出流水线。
+（注：依据 PRD 规范，Python 模块仅负责离线 PDF 到 JSON 的转换，不负责数据库导入，确保离线与在线架构隔离）
+"""
 

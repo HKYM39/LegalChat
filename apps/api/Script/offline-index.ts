@@ -1,3 +1,15 @@
+/**
+ * 离线索引流水线 (Offline Indexing Pipeline)
+ * 
+ * 职责：
+ * 1. 读取由 Python 脚本生成的标准化 JSON 文档。
+ * 2. 执行法律感知的文档分块 (Legal-aware Chunking)。
+ * 3. 调用 Gemini API 生成文本嵌入向量 (Embeddings)。
+ * 4. 将结构化数据导入 PostgreSQL (Drizzle)。
+ * 5. 将向量数据同步到 Pinecone 向量数据库。
+ * 
+ * 符合 PRD 第 9 章节定义的离线索引流程。
+ */
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -13,6 +25,9 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const apiDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(apiDir, "../..");
 
+/**
+ * 标准化段落类型定义
+ */
 type NormalizedParagraph = {
   id: string;
   document_id: string;
@@ -26,6 +41,9 @@ type NormalizedParagraph = {
   section_id: string | null;
 };
 
+/**
+ * 标准化文档类型定义
+ */
 type NormalizedDocument = {
   id: string;
   source_path: string;
@@ -53,6 +71,9 @@ type NormalizedDocument = {
   warnings?: string[];
 };
 
+/**
+ * 索引块类型定义
+ */
 type IndexedChunk = {
   id: string;
   documentId: string;
@@ -80,6 +101,9 @@ type ExistingChunkRow = {
   vectorProvider: string | null;
 };
 
+/**
+ * 命令行选项
+ */
 type CliOptions = {
   inputDir: string;
   chunkOutputDir: string;
@@ -93,6 +117,9 @@ type CliOptions = {
   forceReembed: boolean;
 };
 
+/**
+ * 运行时环境配置
+ */
 type RuntimeConfig = {
   databaseUrl?: string;
   pineconeApiKey?: string;
@@ -110,6 +137,9 @@ type PineconeVector = {
   metadata: Record<string, string | number | boolean | null>;
 };
 
+/**
+ * 规范化嵌入模型名称
+ */
 function normalizeGeminiEmbeddingModel(value?: string): string {
   if (!value || value === "text-embedding-004") {
     return "gemini-embedding-001";
@@ -117,12 +147,16 @@ function normalizeGeminiEmbeddingModel(value?: string): string {
   return value;
 }
 
-const CHUNK_PARAGRAPH_TARGET = 3;
-const CHUNK_PARAGRAPH_MAX = 5;
-const CHUNK_CHAR_SOFT_LIMIT = 3500;
-const HEADING_TEXT_MAX_LENGTH = 80;
+// 分块策略参数
+const CHUNK_PARAGRAPH_TARGET = 3;      // 目标分块包含的段落数
+const CHUNK_PARAGRAPH_MAX = 5;         // 最大段落数
+const CHUNK_CHAR_SOFT_LIMIT = 3500;    // 字符数软限制
+const HEADING_TEXT_MAX_LENGTH = 80;    // 标题最大长度判定
 const PINECONE_API_VERSION = "2025-10";
 
+/**
+ * 解析命令行参数
+ */
 function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     inputDir: path.join(repoRoot, "tools/output/normalized"),
@@ -184,6 +218,9 @@ function parseArgs(argv: string[]): CliOptions {
   return options;
 }
 
+/**
+ * 加载脚本运行所需的配置
+ */
 function loadRuntimeConfig(): RuntimeConfig {
   return {
     databaseUrl: readEnv("DATABASE_URL"),
@@ -218,6 +255,9 @@ function readNumberEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/**
+ * 手动加载本地 .env 文件
+ */
 async function loadLocalEnvFile() {
   const envPath = path.join(apiDir, ".env");
   try {
@@ -238,7 +278,7 @@ async function loadLocalEnvFile() {
       }
     }
   } catch {
-    // Ignore missing local env file. The caller may already provide env vars.
+    // 忽略缺失的本地环境文件
   }
 }
 
@@ -248,14 +288,23 @@ function log(message: string, verbose = true, options?: CliOptions) {
   }
 }
 
+/**
+ * 粗略估算 Token 数量
+ */
 function estimateTokens(value: string): number {
   return Math.max(1, Math.round(value.split(/\s+/).filter(Boolean).length * 1.3));
 }
 
+/**
+ * 生成 SHA256 哈希
+ */
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+/**
+ * 基于种子生成稳定的 UUID
+ */
 function stableUuid(seed: string): string {
   const hash = createHash("sha1").update(seed).digest();
   const bytes = Uint8Array.from(hash.subarray(0, 16));
@@ -271,10 +320,16 @@ function stableUuid(seed: string): string {
   ].join("-");
 }
 
+/**
+ * 生成向量 ID，确保同一内容对应同一 ID
+ */
 function chunkVectorId(chunkId: string, embeddingModel: string): string {
   return `chunk_${sha256Hex(`${chunkId}:${embeddingModel}`).slice(0, 24)}`;
 }
 
+/**
+ * 判定一段文本是否看起来像标题
+ */
 function isHeadingLike(text: string): boolean {
   const compact = text.replace(/\s+/g, " ").trim();
   if (!compact) {
@@ -286,6 +341,9 @@ function isHeadingLike(text: string): boolean {
   return new Set(["Representation", "ORDER", "CATCHWORDS", "This appeal"]).has(compact);
 }
 
+/**
+ * 格式化段落内容用于分块展示
+ */
 function formatParagraphForChunk(paragraph: NormalizedParagraph): string {
   if (paragraph.paragraph_no == null) {
     return paragraph.paragraph_text.trim();
@@ -293,6 +351,11 @@ function formatParagraphForChunk(paragraph: NormalizedParagraph): string {
   return `[${paragraph.paragraph_no}] ${paragraph.paragraph_text.trim()}`;
 }
 
+/**
+ * 执行文档分块逻辑 (Chunking)
+ * 
+ * 策略：按段落合并，考虑字符长度限制与标题变化。
+ */
 function buildChunks(
   document: NormalizedDocument,
   existingById: Map<string, ExistingChunkRow>,
@@ -315,10 +378,13 @@ function buildChunks(
     const paragraphStartNo = paragraphNumbers[0] ?? currentGroup[0]?.paragraph_order ?? null;
     const paragraphEndNo =
       paragraphNumbers.at(-1) ?? currentGroup.at(-1)?.paragraph_order ?? null;
+    
+    // 生成基于内容稳定的 ID
     const chunkId = stableUuid(
       `chunk:${document.id}:${chunkIndex}:${paragraphStartNo ?? "na"}:${paragraphEndNo ?? "na"}:${chunkText}`,
     );
     const existing = existingById.get(chunkId);
+    
     chunks.push({
       id: chunkId,
       documentId: document.id,
@@ -332,6 +398,7 @@ function buildChunks(
       paragraphIds: currentGroup.map((paragraph) => paragraph.id),
       paragraphOrders: currentGroup.map((paragraph) => paragraph.paragraph_order),
       sectionId: currentGroup.find((paragraph) => paragraph.section_id)?.section_id ?? null,
+      // 如果已存在向量且未强制重新生成，则保留旧状态
       vectorId:
         !options.forceReembed && existing?.vectorId
           ? existing.vectorId
@@ -367,6 +434,7 @@ function buildChunks(
         paragraphHeading !== currentHeadingPath &&
         currentGroup.length >= 1;
 
+      // 如果遇到新标题或达到字数上限，则切分
       if (
         headingChanged ||
         currentChars + paragraphText.length > CHUNK_CHAR_SOFT_LIMIT
@@ -402,6 +470,9 @@ function buildChunks(
   return chunks;
 }
 
+/**
+ * 发现待处理的标准化 JSON 文件
+ */
 async function discoverNormalizedFiles(options: CliOptions): Promise<string[]> {
   const entries = await readdir(options.inputDir, { withFileTypes: true });
   const files = entries
@@ -420,6 +491,9 @@ async function discoverNormalizedFiles(options: CliOptions): Promise<string[]> {
   return filtered;
 }
 
+/**
+ * 读取并解析标准化文档
+ */
 async function readNormalizedDocument(filePath: string): Promise<NormalizedDocument> {
   const raw = await readFile(filePath, "utf-8");
   const parsed = JSON.parse(raw) as NormalizedDocument;
@@ -427,6 +501,9 @@ async function readNormalizedDocument(filePath: string): Promise<NormalizedDocum
   return parsed;
 }
 
+/**
+ * 基础校验标准化文档格式
+ */
 function validateNormalizedDocument(document: NormalizedDocument, filePath: string) {
   if (!document.id) {
     throw new Error(`Normalized document missing id: ${filePath}`);
@@ -444,6 +521,9 @@ function validateNormalizedDocument(document: NormalizedDocument, filePath: stri
   }
 }
 
+/**
+ * 将分块结果保存为快照 JSON
+ */
 async function writeChunkSnapshot(
   document: NormalizedDocument,
   chunks: IndexedChunk[],
@@ -481,6 +561,9 @@ async function writeChunkSnapshot(
   );
 }
 
+/**
+ * 从数据库获取已存在的分块记录，用于增量索引
+ */
 async function fetchExistingChunks(
   database: ReturnType<typeof drizzle>,
   documentId: string,
@@ -499,6 +582,9 @@ async function fetchExistingChunks(
   return new Map(rows.map((row) => [row.id, row]));
 }
 
+/**
+ * 将文档与分块同步到关系数据库 (Drizzle)
+ */
 async function syncCanonicalRecords(input: {
   database: ReturnType<typeof drizzle>;
   document: NormalizedDocument;
@@ -507,6 +593,7 @@ async function syncCanonicalRecords(input: {
   const { database, document, chunks } = input;
 
   await database.transaction(async (tx) => {
+    // 插入或更新文档记录
     await tx
       .insert(legalDocuments)
       .values({
@@ -563,6 +650,7 @@ async function syncCanonicalRecords(input: {
         },
       });
 
+    // 清理旧的段落与分块记录
     await tx
       .delete(legalDocumentParagraphs)
       .where(eq(legalDocumentParagraphs.documentId, document.id));
@@ -571,6 +659,7 @@ async function syncCanonicalRecords(input: {
       .delete(legalDocumentChunks)
       .where(eq(legalDocumentChunks.documentId, document.id));
 
+    // 批量插入段落
     await tx.insert(legalDocumentParagraphs).values(
       document.paragraphs.map((paragraph) => ({
         id: paragraph.id,
@@ -585,6 +674,7 @@ async function syncCanonicalRecords(input: {
       })),
     );
 
+    // 批量插入分块
     await tx.insert(legalDocumentChunks).values(
       chunks.map((chunk) => ({
         id: chunk.id,
@@ -612,6 +702,9 @@ async function syncCanonicalRecords(input: {
   });
 }
 
+/**
+ * 请求 API 生成文本嵌入
+ */
 async function requestEmbedding(
   config: RuntimeConfig,
   model: string,
@@ -661,6 +754,9 @@ async function requestEmbedding(
   return values;
 }
 
+/**
+ * 封装嵌入请求，包含模型回退逻辑
+ */
 async function embedText(
   config: RuntimeConfig,
   text: string,
@@ -692,6 +788,9 @@ function pineconeBaseUrl(indexHost: string): string {
   return `https://${indexHost.replace(/\/$/, "")}`;
 }
 
+/**
+ * 构建 Pinecone 向量元数据
+ */
 function buildPineconeMetadata(document: NormalizedDocument, chunk: IndexedChunk) {
   return Object.fromEntries(
     Object.entries({
@@ -711,6 +810,9 @@ function buildPineconeMetadata(document: NormalizedDocument, chunk: IndexedChunk
   );
 }
 
+/**
+ * 将向量批量上传到 Pinecone
+ */
 async function upsertPineconeVectors(input: {
   config: RuntimeConfig;
   vectors: PineconeVector[];
@@ -743,6 +845,9 @@ async function upsertPineconeVectors(input: {
   return (await response.json()) as { upsertedCount?: number };
 }
 
+/**
+ * 更新数据库中分块的向量状态与索引状态
+ */
 async function updateChunkVectorState(input: {
   database: ReturnType<typeof drizzle>;
   documentId: string;
@@ -779,6 +884,9 @@ async function updateChunkVectorState(input: {
   });
 }
 
+/**
+ * 处理单个文档的索引全流程
+ */
 async function processDocument(input: {
   database: ReturnType<typeof drizzle> | null;
   document: NormalizedDocument;
@@ -786,6 +894,8 @@ async function processDocument(input: {
   config: RuntimeConfig;
 }) {
   const { database, document, options, config } = input;
+  
+  // 1. 分块
   const existingById =
     database && !options.dryRun
       ? await fetchExistingChunks(database, document.id)
@@ -807,8 +917,10 @@ async function processDocument(input: {
     };
   }
 
+  // 2. 同步关系数据库记录
   await syncCanonicalRecords({ database, document, chunks });
 
+  // 3. 筛选需要生成向量的分块
   const chunksNeedingVectors = chunks.filter((chunk) => {
     if (options.skipEmbeddings || options.skipPinecone) {
       return false;
@@ -837,6 +949,7 @@ async function processDocument(input: {
     };
   }
 
+  // 4. 生成嵌入向量并同步 Pinecone
   const vectors: PineconeVector[] = [];
   for (const chunk of chunksNeedingVectors) {
     const embedding = await embedText(config, chunk.chunkText);
@@ -858,6 +971,7 @@ async function processDocument(input: {
     options,
   );
 
+  // 5. 更新索引状态为已完成
   const indexed = chunks.every((chunk) => Boolean(chunk.vectorId));
   await updateChunkVectorState({
     database,
@@ -873,16 +987,22 @@ async function processDocument(input: {
   };
 }
 
+/**
+ * 脚本主函数入口
+ */
 async function main() {
   await loadLocalEnvFile();
   const options = parseArgs(process.argv.slice(2));
   const config = loadRuntimeConfig();
+  
+  // 1. 扫描文件
   const files = await discoverNormalizedFiles(options);
 
   if (files.length === 0) {
     throw new Error(`No normalized JSON files found under ${options.inputDir}`);
   }
 
+  // 2. 环境预检
   const requiresDatabase = !options.dryRun;
   if (requiresDatabase && !config.databaseUrl) {
     throw new Error("DATABASE_URL is required unless --dry-run is used");
@@ -907,6 +1027,7 @@ async function main() {
   let embeddedChunks = 0;
 
   try {
+    // 3. 循环处理每个文档
     for (const filePath of files) {
       try {
         const document = await readNormalizedDocument(filePath);

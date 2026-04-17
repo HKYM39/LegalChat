@@ -1,3 +1,9 @@
+/**
+ * 法律研究数据存储库 (Repository)
+ * 
+ * 本模块封装了所有与法律文档检索、案件详情查询以及 RAG 流程持久化相关的数据库操作。
+ * 它连接了 Drizzle 定义的数据模型与业务逻辑层，提供高层次的数据访问 API。
+ */
 import {
   and,
   asc,
@@ -25,6 +31,9 @@ import {
   searchQueries,
 } from "../schema";
 
+/**
+ * 词法搜索结果行定义
+ */
 export type LexicalSearchRow = {
   documentId: string;
   chunkId: string;
@@ -34,12 +43,15 @@ export type LexicalSearchRow = {
   jurisdiction: string | null;
   documentType: string;
   decisionDate: string | null;
-  snippet: string;
-  score: number;
+  snippet: string; // 召回的文本片段
+  score: number;   // 相关度评分
   paragraphStartNo: number | null;
   paragraphEndNo: number | null;
 };
 
+/**
+ * 文档详情行定义
+ */
 export type DocumentDetailRow = {
   documentId: string;
   title: string;
@@ -56,6 +68,9 @@ export type DocumentDetailRow = {
   indexingStatus: string;
 };
 
+/**
+ * 段落行定义
+ */
 export type ParagraphRow = {
   id: string;
   documentId: string;
@@ -64,7 +79,15 @@ export type ParagraphRow = {
   paragraphText: string;
 };
 
+/**
+ * 创建法律研究存储库实例
+ * 
+ * @param database Drizzle 数据库实例
+ */
 export function createLegalResearchRepository(database: Database) {
+  /**
+   * 构建通用的文档过滤条件
+   */
   function buildFilters(filters: SearchFilters) {
     const clauses = [eq(legalDocuments.isActive, true)];
 
@@ -88,12 +111,17 @@ export function createLegalResearchRepository(database: Database) {
   }
 
   return {
+    /**
+     * 基于 ILIKE 的简单词法搜索实现 (MVP 阶段使用)
+     * 实现了对引用号、标题和分块正文的加权搜索。
+     */
     async lexicalSearch(input: {
       normalizedQuery: string;
       filters: SearchFilters;
       limit: number;
     }): Promise<LexicalSearchRow[]> {
       const likeQuery = `%${input.normalizedQuery}%`;
+      // 计算简单的相关度权重
       const score = sql<number>`
         (
           CASE
@@ -154,6 +182,10 @@ export function createLegalResearchRepository(database: Database) {
       }));
     },
 
+    /**
+     * 根据向量库召回的 ID 列表获取完整的分块和文档信息
+     * 保持向量召回的原始排名顺序。
+     */
     async findChunksByVectorIds(vectorIds: string[]): Promise<LexicalSearchRow[]> {
       if (vectorIds.length === 0) {
         return [];
@@ -163,6 +195,7 @@ export function createLegalResearchRepository(database: Database) {
         .select({
           documentId: legalDocuments.id,
           chunkId: legalDocumentChunks.id,
+          vectorId: legalDocumentChunks.vectorId,
           title: legalDocuments.title,
           neutralCitation: legalDocuments.neutralCitation,
           court: legalDocuments.court,
@@ -195,6 +228,9 @@ export function createLegalResearchRepository(database: Database) {
       }).map(({ vectorId: _vectorId, ...row }) => row);
     },
 
+    /**
+     * 获取指定文档的详细元数据
+     */
     async getDocumentById(documentId: string): Promise<DocumentDetailRow | null> {
       const [row] = await database
         .select({
@@ -219,6 +255,9 @@ export function createLegalResearchRepository(database: Database) {
       return row ?? null;
     },
 
+    /**
+     * 获取指定文档的所有段落原文，按顺序排列
+     */
     async getDocumentParagraphs(documentId: string): Promise<ParagraphRow[]> {
       return database
         .select({
@@ -233,6 +272,9 @@ export function createLegalResearchRepository(database: Database) {
         .orderBy(asc(legalDocumentParagraphs.paragraphOrder));
     },
 
+    /**
+     * 持久化搜索查询记录
+     */
     async insertSearchQuery(input: {
       conversationId?: string;
       messageId?: string;
@@ -258,6 +300,9 @@ export function createLegalResearchRepository(database: Database) {
       return row?.id ?? null;
     },
 
+    /**
+     * 持久化检索运行记录
+     */
     async insertRetrievalRun(input: {
       queryId: string;
       retrievalStrategy: string;
@@ -287,6 +332,9 @@ export function createLegalResearchRepository(database: Database) {
       return row?.id ?? null;
     },
 
+    /**
+     * 批量持久化检索召回的候选分块
+     */
     async insertRetrievalCandidates(
       input: Array<{
         retrievalRunId: string;
@@ -310,6 +358,9 @@ export function createLegalResearchRepository(database: Database) {
       await database.insert(retrievalCandidates).values(input);
     },
 
+    /**
+     * 持久化 LLM 生成的答案会话
+     */
     async insertAnswerSession(input: {
       queryId?: string | null;
       retrievalRunId?: string | null;
@@ -339,6 +390,9 @@ export function createLegalResearchRepository(database: Database) {
       return row?.id ?? null;
     },
 
+    /**
+     * 批量持久化答案中的引用依据
+     */
     async insertAnswerCitations(
       input: Array<{
         answerSessionId: string;

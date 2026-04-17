@@ -31,6 +31,10 @@ cp apps/web/.env.example apps/web/.env.local
 
 - `API_BASE_URL`
   Next.js 服务器转发到 Hono API 的基础地址。未配置时，开发环境会自动探测 `http://127.0.0.1:8787-8795` 中可用的 Wrangler 端口。
+- `NEXT_PUBLIC_CHAT_RATE_LIMIT_PER_MINUTE`
+  前端本地预检查使用的分钟级聊天额度，默认 `10`
+- `NEXT_PUBLIC_CHAT_RATE_LIMIT_PER_DAY`
+  前端本地预检查使用的天级聊天额度，默认 `100`
 
 ## 本地运行
 
@@ -70,3 +74,5 @@ pnpm --filter web test
 其中 `/ask` 是主交互入口，authority card 点击后会跳转到 `/documents/[documentId]` 并尝试根据段落范围定位引用内容。
 
 为避免浏览器跨域和 Wrangler 端口漂移问题，前端通过 Next.js 同源 `/api/*` 代理转发到后端。
+
+前端会基于本地持久化的匿名 `conversationId` 执行聊天额度预检查；真实限流仍以后端 `/ask` 返回的 `429` 结果为准。

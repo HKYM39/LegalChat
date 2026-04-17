@@ -1,3 +1,9 @@
+/**
+ * Drizzle 关系定义
+ * 
+ * 定义数据表之间的逻辑关联，支持 Drizzle 查询 API 的关联加载 (with 查询)。
+ * 描述了从文档到段落、分块，从对话到消息、答案等完整的领域模型关联。
+ */
 import { relations } from "drizzle-orm";
 
 import { answerCitations, answerSessions } from "./answers";
@@ -21,6 +27,9 @@ import {
   searchQueries,
 } from "./retrieval";
 
+/**
+ * 法律文档 (legal_documents) 关系
+ */
 export const legalDocumentsRelations = relations(legalDocuments, ({ many }) => ({
   sections: many(legalDocumentSections),
   paragraphs: many(legalDocumentParagraphs),
@@ -35,6 +44,9 @@ export const legalDocumentsRelations = relations(legalDocuments, ({ many }) => (
   answerCitations: many(answerCitations),
 }));
 
+/**
+ * 法律文档章节 (legal_document_sections) 关系
+ */
 export const legalDocumentSectionsRelations = relations(
   legalDocumentSections,
   ({ one, many }) => ({
@@ -55,6 +67,9 @@ export const legalDocumentSectionsRelations = relations(
   }),
 );
 
+/**
+ * 法律文档段落 (legal_document_paragraphs) 关系
+ */
 export const legalDocumentParagraphsRelations = relations(
   legalDocumentParagraphs,
   ({ one, many }) => ({
@@ -70,6 +85,9 @@ export const legalDocumentParagraphsRelations = relations(
   }),
 );
 
+/**
+ * 法律文档分块 (legal_document_chunks) 关系
+ */
 export const legalDocumentChunksRelations = relations(
   legalDocumentChunks,
   ({ one, many }) => ({
@@ -87,6 +105,9 @@ export const legalDocumentChunksRelations = relations(
   }),
 );
 
+/**
+ * 法律引用 (legal_document_citations) 关系
+ */
 export const legalDocumentCitationsRelations = relations(
   legalDocumentCitations,
   ({ one }) => ({
@@ -111,12 +132,18 @@ export const legalDocumentCitationsRelations = relations(
   }),
 );
 
+/**
+ * 对话 (conversations) 关系
+ */
 export const conversationsRelations = relations(conversations, ({ many }) => ({
   messages: many(messages),
   searchQueries: many(searchQueries),
   answerSessions: many(answerSessions),
 }));
 
+/**
+ * 消息 (messages) 关系
+ */
 export const messagesRelations = relations(messages, ({ one, many }) => ({
   conversation: one(conversations, {
     fields: [messages.conversationId],
@@ -126,6 +153,9 @@ export const messagesRelations = relations(messages, ({ one, many }) => ({
   answerSessions: many(answerSessions),
 }));
 
+/**
+ * 查询 (search_queries) 关系
+ */
 export const searchQueriesRelations = relations(searchQueries, ({ one, many }) => ({
   conversation: one(conversations, {
     fields: [searchQueries.conversationId],
@@ -139,6 +169,9 @@ export const searchQueriesRelations = relations(searchQueries, ({ one, many }) =
   answerSessions: many(answerSessions),
 }));
 
+/**
+ * 检索运行 (retrieval_runs) 关系
+ */
 export const retrievalRunsRelations = relations(retrievalRuns, ({ one, many }) => ({
   query: one(searchQueries, {
     fields: [retrievalRuns.queryId],
@@ -148,6 +181,9 @@ export const retrievalRunsRelations = relations(retrievalRuns, ({ one, many }) =
   answerSessions: many(answerSessions),
 }));
 
+/**
+ * 检索候选分块 (retrieval_candidates) 关系
+ */
 export const retrievalCandidatesRelations = relations(
   retrievalCandidates,
   ({ one }) => ({
@@ -166,6 +202,9 @@ export const retrievalCandidatesRelations = relations(
   }),
 );
 
+/**
+ * 答案会话 (answer_sessions) 关系
+ */
 export const answerSessionsRelations = relations(answerSessions, ({ one, many }) => ({
   conversation: one(conversations, {
     fields: [answerSessions.conversationId],
@@ -186,6 +225,9 @@ export const answerSessionsRelations = relations(answerSessions, ({ one, many })
   citations: many(answerCitations),
 }));
 
+/**
+ * 答案引用 (answer_citations) 关系
+ */
 export const answerCitationsRelations = relations(answerCitations, ({ one }) => ({
   answerSession: one(answerSessions, {
     fields: [answerCitations.answerSessionId],
@@ -201,6 +243,9 @@ export const answerCitationsRelations = relations(answerCitations, ({ one }) => 
   }),
 }));
 
+/**
+ * 评估数据集 (evaluation_datasets) 关系
+ */
 export const evaluationDatasetsRelations = relations(
   evaluationDatasets,
   ({ many }) => ({
@@ -209,6 +254,9 @@ export const evaluationDatasetsRelations = relations(
   }),
 );
 
+/**
+ * 评估查询 (evaluation_queries) 关系
+ */
 export const evaluationQueriesRelations = relations(
   evaluationQueries,
   ({ one, many }) => ({
@@ -220,6 +268,9 @@ export const evaluationQueriesRelations = relations(
   }),
 );
 
+/**
+ * 评估运行 (evaluation_runs) 关系
+ */
 export const evaluationRunsRelations = relations(evaluationRuns, ({ one, many }) => ({
   dataset: one(evaluationDatasets, {
     fields: [evaluationRuns.datasetId],
@@ -228,6 +279,9 @@ export const evaluationRunsRelations = relations(evaluationRuns, ({ one, many })
   results: many(evaluationResults),
 }));
 
+/**
+ * 评估结果 (evaluation_results) 关系
+ */
 export const evaluationResultsRelations = relations(
   evaluationResults,
   ({ one }) => ({

@@ -1,3 +1,10 @@
+/**
+ * AI 逻辑与 RAG 核心处理模块
+ * 
+ * 本模块负责查询分类、检索计划构建、混合检索结果融合 (Reranking)、
+ * 以及基于 Google Gemini 的 Grounded 答案生成。
+ * 它实现了 RAG 流程中“检索之后、生成之前”的关键逻辑。
+ */
 import type {
   AskResponse,
   AuthorityResult,
@@ -6,6 +13,10 @@ import type {
   SupportingExcerpt,
 } from "../../shared/src/index.ts";
 
+/**
+ * 检索候选对象扩展类型
+ * 包含各维度的排名和评分信息，用于 Rerank。
+ */
 export type RetrievalCandidate = AuthorityResult & {
   denseRank?: number;
   lexicalRank?: number;
@@ -16,16 +27,23 @@ export type RetrievalCandidate = AuthorityResult & {
   rerankedScore?: number;
 };
 
+/**
+ * 检索计划
+ * 定义如何针对特定查询执行召回。
+ */
 export type RetrievalPlan = {
-  normalizedQuery: string;
-  lexicalQuery: string;
-  queryType: QueryType;
-  topK: number;
-  lexicalTopK: number;
-  denseTopK: number;
-  filters: SearchFilters;
+  normalizedQuery: string; // 标准化后的查询
+  lexicalQuery: string;    // 词法搜索关键字
+  queryType: QueryType;    // 查询分类
+  topK: number;            // 最终需要的 K 值
+  lexicalTopK: number;     // 词法召回 K 值
+  denseTopK: number;       // 向量召回 K 值
+  filters: SearchFilters;  // 元数据过滤器
 };
 
+/**
+ * 提示词中的证据项格式
+ */
 export type PromptEvidence = {
   label: string;
   title: string;
@@ -34,6 +52,9 @@ export type PromptEvidence = {
   traceability: AuthorityResult["traceability"];
 };
 
+/**
+ * 模型生成的答案结果结构
+ */
 export type AnswerModelResult = {
   answerText: string;
   limitations: string[];
@@ -43,6 +64,9 @@ export type AnswerModelResult = {
   }>;
 };
 
+/**
+ * Gemini 模型配置
+ */
 export type GeminiConfig = {
   apiKey?: string;
   model: string;
@@ -51,33 +75,50 @@ export type GeminiConfig = {
   apiBaseUrl: string;
 };
 
+/**
+ * 压缩空白字符
+ */
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * 标准化用户查询文本
+ */
 export function normalizeQuery(input: string): string {
   return compactWhitespace(input)
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'");
 }
 
+/**
+ * 对用户查询进行分类
+ * 识别出是引用查找、案件名查找、法条查找还是通用自然语言问题。
+ */
 export function classifyQuery(input: string): QueryType {
   const normalized = normalizeQuery(input).toLowerCase();
+  // 匹配类似 [2025] HCA 2 的引用格式
   if (/\b\d{4}\b/.test(normalized) && normalized.includes("v")) {
     return "citation_lookup";
   }
+  // 匹配包含法律主体后缀的词
   if (/\b(inc|corp|llc|ltd|commission|state|people|re)\b/.test(normalized)) {
     return "case_name_lookup";
   }
+  // 匹配法律文档类型关键字
   if (/\b(act|code|statute|regulation|section|rule)\b/.test(normalized)) {
     return "legislation_lookup";
   }
+  // 短查询视为关键词查找
   if (normalized.split(" ").length <= 5) {
     return "keyword_lookup";
   }
   return "natural_language_query";
 }
 
+/**
+ * 构建用于全文检索的词法查询字符串
+ */
 export function buildLexicalQuery(input: string, queryType?: QueryType): string {
   const normalized = normalizeQuery(input);
   const resolvedType = queryType ?? classifyQuery(normalized);
@@ -96,6 +137,7 @@ export function buildLexicalQuery(input: string, queryType?: QueryType): string 
   }
 
   if (resolvedType === "natural_language_query") {
+    // 提取关键词并过滤停用词
     const tokens = normalized
       .toLowerCase()
       .replace(/[^a-z0-9\s]/g, " ")
@@ -128,6 +170,9 @@ export function buildLexicalQuery(input: string, queryType?: QueryType): string 
   return normalized;
 }
 
+/**
+ * 根据输入构建检索计划
+ */
 export function buildRetrievalPlan(input: {
   query: string;
   topK: number;
@@ -148,6 +193,9 @@ export function buildRetrievalPlan(input: {
   };
 }
 
+/**
+ * 融合词法检索与向量检索的结果并进行重排 (RRF 变体或加权融合)
+ */
 export function mergeAndRerankCandidates(input: {
   lexical: RetrievalCandidate[];
   dense: RetrievalCandidate[];
@@ -158,6 +206,7 @@ export function mergeAndRerankCandidates(input: {
 } {
   const merged = new Map<string, RetrievalCandidate>();
 
+  // 记录词法搜索结果
   for (const [index, candidate] of input.lexical.entries()) {
     merged.set(candidate.chunkId, {
       ...candidate,
@@ -166,6 +215,7 @@ export function mergeAndRerankCandidates(input: {
     });
   }
 
+  // 合并向量搜索结果
   for (const [index, candidate] of input.dense.entries()) {
     const existing = merged.get(candidate.chunkId);
     if (existing) {
@@ -180,6 +230,7 @@ export function mergeAndRerankCandidates(input: {
     }
   }
 
+  // 综合评分逻辑
   const reranked = Array.from(merged.values())
     .map((candidate) => {
       const lexicalBoost =
@@ -217,6 +268,9 @@ export function mergeAndRerankCandidates(input: {
   };
 }
 
+/**
+ * 将检索候选转化为 LLM 提示词中的证据项
+ */
 export function buildPromptEvidence(candidates: RetrievalCandidate[]): PromptEvidence[] {
   return candidates.map((candidate, index) => ({
     label: `A${index + 1}`,
@@ -227,6 +281,9 @@ export function buildPromptEvidence(candidates: RetrievalCandidate[]): PromptEvi
   }));
 }
 
+/**
+ * 构建用于 Grounded 生成的系统提示词
+ */
 export function buildGroundedPrompt(input: {
   query: string;
   evidence: PromptEvidence[];
@@ -250,6 +307,9 @@ export function buildGroundedPrompt(input: {
   ].join("\n\n");
 }
 
+/**
+ * 调用 Gemini 模型生成向量嵌入
+ */
 export async function embedQuery(
   config: GeminiConfig,
   query: string,
@@ -294,6 +354,9 @@ export async function embedQuery(
   }
 }
 
+/**
+ * 解析 Gemini 返回的 JSON 格式内容
+ */
 function parseGeminiJson(text: string): AnswerModelResult | null {
   const normalizedText = text
     .replace(/^```(?:json)?\s*/i, "")
@@ -342,6 +405,9 @@ function parseGeminiJson(text: string): AnswerModelResult | null {
   }
 }
 
+/**
+ * 调用 Gemini 生成基于证据的 Grounded 回答
+ */
 export async function generateGroundedAnswer(input: {
   config: GeminiConfig;
   query: string;
@@ -405,6 +471,9 @@ export async function generateGroundedAnswer(input: {
   }
 }
 
+/**
+ * 当模型生成失败或证据不足时构建保守回答
+ */
 export function buildConservativeAnswer(input: {
   query: string;
   authorities: RetrievalCandidate[];
@@ -438,6 +507,9 @@ export function buildConservativeAnswer(input: {
   };
 }
 
+/**
+ * 组装最终的 /ask 接口响应
+ */
 export function buildAskResponse(input: {
   query: string;
   plan: RetrievalPlan;
@@ -453,12 +525,14 @@ export function buildAskResponse(input: {
     });
   }
 
+  // 构建标签到元数据的映射
   const traceabilityByLabel = new Map(
     input.authorities.map((authority, index) => [
       `A${index + 1}`,
       authority.traceability,
     ]),
   );
+  // 注入可追溯性信息到支持性片段中
   const supportingExcerpts = input.answer.supportingExcerpts.flatMap((item) => {
     const traceability = traceabilityByLabel.get(item.label);
     if (!traceability) {
@@ -473,6 +547,7 @@ export function buildAskResponse(input: {
     ];
   });
 
+  // 如果生成的答案中一个有效引用都没有，降级为保守回答
   if (supportingExcerpts.length === 0) {
     return buildConservativeAnswer({
       query: input.query,

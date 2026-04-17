@@ -1,3 +1,10 @@
+/**
+ * 底部聊天输入框组件 (ChatComposer)
+ * 
+ * 核心职责：
+ * 接收用户的自然语言提问，支持换行，并通过回车或点击按钮提交问题以触发法律检索和 AI 回答。
+ * 同时处理限流状态与错误提示。
+ */
 "use client";
 
 import Alert from "@mui/material/Alert";
@@ -5,16 +12,24 @@ import IconButton from "@mui/material/IconButton";
 import TextField from "@mui/material/TextField";
 
 type ChatComposerProps = {
+  // 当前输入框的值
   value: string;
+  // 是否正在提交中（此时禁用输入和按钮）
   isSubmitting: boolean;
+  // 是否受到频率限制
+  isRateLimited: boolean;
+  // 错误信息提示
   error: string | null;
+  // 输入值变化回调
   onChange: (value: string) => void;
+  // 提交问题回调
   onSubmit: () => void;
 };
 
 export function ChatComposer({
   value,
   isSubmitting,
+  isRateLimited,
   error,
   onChange,
   onSubmit,
@@ -22,6 +37,7 @@ export function ChatComposer({
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-4 sm:px-6 sm:pb-6">
       <div className="pointer-events-auto flex w-full max-w-3xl flex-col gap-3">
+        {/* 全局错误或限流警告展示 */}
         {error ? (
           <Alert
             severity="error"
@@ -44,12 +60,13 @@ export function ChatComposer({
               minRows={1}
               onChange={(event) => onChange(event.target.value)}
               onKeyDown={(event) => {
+                // 回车键直接提交，Shift + 回车进行换行
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   onSubmit();
                 }
               }}
-              placeholder="Ask a legal research question..."
+              placeholder="提出法律研究问题 (Ask a legal research question...)"
               slotProps={{
                 input: {
                   sx: {
@@ -61,7 +78,7 @@ export function ChatComposer({
                   },
                 },
                 htmlInput: {
-                  "aria-label": "Ask a legal research question",
+                  "aria-label": "提出法律研究问题",
                 },
               }}
               sx={{
@@ -75,9 +92,10 @@ export function ChatComposer({
               }}
               value={value}
             />
+            {/* 提交按钮 */}
             <IconButton
               color="primary"
-              disabled={isSubmitting || value.trim().length === 0}
+              disabled={isSubmitting || isRateLimited || value.trim().length === 0}
               onClick={onSubmit}
               sx={{
                 width: 44,
@@ -96,9 +114,9 @@ export function ChatComposer({
               <span className="text-lg leading-none">↑</span>
             </IconButton>
           </div>
+          {/* 免责声明提示 */}
           <p className="px-2 pt-2 text-center text-[11px] text-[var(--ink-500)]">
-            CaseBase AI may surface incomplete research. Always verify the cited
-            authorities.
+            CaseBase AI 可能会返回不完整的研究结果。请始终核实引用的权威案例。
           </p>
         </div>
       </div>
