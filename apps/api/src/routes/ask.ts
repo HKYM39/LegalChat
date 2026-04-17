@@ -10,8 +10,13 @@
  * 符合 PRD 4.3 章节定义的 /ask 接口要求。
  */
 import { Hono } from "hono";
-import { parseAskBody } from "../../../../packages/shared/src/index.ts";
+import {
+  INPUT_SECURITY_ERROR_CODE,
+  parseAskBody,
+  validateUserInputSecurity,
+} from "../../../../packages/shared/src/index.ts";
 
+import { AppError } from "../lib/errors";
 import { resolveChatRateLimitSubject } from "../lib/chat-rate-limit";
 import type { ServiceContainer } from "../services/container";
 
@@ -33,15 +38,31 @@ export function createAskRoute(services: ServiceContainer) {
     
     // 解析并验证请求体 (使用共享的 Zod Schema)
     const input = parseAskBody(body);
+
+    const inputSecurity = validateUserInputSecurity(input.query);
+    if (!inputSecurity.allowed) {
+      throw new AppError(
+        422,
+        INPUT_SECURITY_ERROR_CODE,
+        inputSecurity.violation.message,
+        inputSecurity.violation,
+      );
+    }
     
     // 执行对话逻辑，并注入速率限制标识
-    const response = await services.runAsk(input, {
+    const response = await services.runAsk(
+      {
+        ...input,
+        query: inputSecurity.normalizedInput,
+      },
+      {
       rateLimitSubject: resolveChatRateLimitSubject({
         conversationId: input.conversationId,
         forwardedFor: c.req.header("x-forwarded-for"),
         cfConnectingIp: c.req.header("cf-connecting-ip"),
       }),
-    });
+      },
+    );
     
     // 返回生成的回答及引用的法律依据
     return c.json(response);

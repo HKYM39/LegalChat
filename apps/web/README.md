@@ -76,3 +76,26 @@ pnpm --filter web test
 为避免浏览器跨域和 Wrangler 端口漂移问题，前端通过 Next.js 同源 `/api/*` 代理转发到后端。
 
 前端会基于本地持久化的匿名 `conversationId` 执行聊天额度预检查；真实限流仍以后端 `/ask` 返回的 `429` 结果为准。
+
+## 输入安全预检
+
+聊天输入在提交 `/ask` 前会先执行本地输入安全预检，规则与后端 `/ask` 入口保持一致，均来自 `packages/shared` 的共享判定器。
+
+当前会拦截：
+
+- 空白输入
+- 超过 `4000` 字符的输入
+- 含异常控制字符的输入
+- 明显 XSS / 脚本注入片段
+- 明显协议探测原始请求片段
+- 明显 SQL / 模板 / 路径探测片段
+
+本地命中时不会发起后端请求；如果用户绕过前端直接调用接口，后端仍会返回同一套结构化错误语义。界面会将本地预检和服务端兜底统一展示为安全提示，而不是普通“请求失败”。
+
+可用以下命令验证：
+
+```bash
+pnpm --filter web typecheck
+pnpm --filter web test
+cd packages/shared && node --import tsx src/input-security.test.ts
+```

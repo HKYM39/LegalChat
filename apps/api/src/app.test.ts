@@ -17,6 +17,10 @@ import type {
   HealthResponse,
   SearchResponse,
 } from "../../../packages/shared/src/index.ts";
+import {
+  INPUT_SECURITY_ERROR_CODE,
+  createInputSecurityViolation,
+} from "../../../packages/shared/src/index.ts";
 
 import { createApp } from "./app";
 import { AppError } from "./lib/errors";
@@ -194,6 +198,81 @@ test("POST /ask 当后端拒绝请求时返回结构化的限流错误", async (
   };
   assert.equal(json.error.code, "chat_rate_limit_exceeded");
   assert.equal(json.error.details.window, "minute");
+});
+
+test("POST /ask 拒绝绕过前端的输入安全非法载荷，且不会进入问答服务", async () => {
+  let runAskCalled = false;
+  const app = createApp({
+    ...stubServices,
+    async runAsk(): Promise<AskResponse> {
+      runAskCalled = true;
+      throw new Error("runAsk should not be called for blocked input");
+    },
+  });
+
+  const response = await app.request("/ask", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      query: "<script>alert('xss')</script>",
+      topK: 3,
+      filters: {},
+    }),
+  });
+
+  assert.equal(response.status, 422);
+  assert.equal(runAskCalled, false);
+  const json = (await response.json()) as {
+    error: {
+      code: string;
+      message: string;
+      details: {
+        code: string;
+        reasonCode: string;
+        message: string;
+        type: string;
+      };
+    };
+  };
+  assert.equal(json.error.code, INPUT_SECURITY_ERROR_CODE);
+  assert.equal(json.error.details.reasonCode, "script_injection_detected");
+});
+
+test("POST /ask 输入安全错误与前端预检共享同一套错误语义", async () => {
+  const expectedViolation = createInputSecurityViolation("protocol_probe_detected");
+  const app = createApp(stubServices);
+
+  const response = await app.request("/ask", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      query: "GET /secret HTTP/1.1\nHost: localhost",
+      topK: 3,
+      filters: {},
+    }),
+  });
+
+  assert.equal(response.status, 422);
+  const json = (await response.json()) as {
+    error: {
+      code: string;
+      message: string;
+      details: {
+        code: string;
+        reasonCode: string;
+        message: string;
+        type: string;
+      };
+    };
+  };
+  assert.equal(json.error.code, expectedViolation.code);
+  assert.equal(json.error.message, expectedViolation.message);
+  assert.equal(json.error.details.reasonCode, expectedViolation.reasonCode);
+  assert.equal(json.error.details.message, expectedViolation.message);
 });
 
 test("GET /documents/:documentId 返回标准的文档详情", async () => {

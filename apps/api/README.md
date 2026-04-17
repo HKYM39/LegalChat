@@ -84,3 +84,32 @@ pnpm --filter api test
 ```
 
 The response includes grounded `authorities`, `supportingExcerpts`, `limitations`, `documentId`, `chunkId`, and paragraph ranges for traceability.
+
+## Input Security Validation
+
+`POST /ask` 在进入检索、模型调用和正常问答日志链路前，会先执行统一的输入安全校验。前端本地预检与后端兜底共用 `packages/shared` 中的同一套规则与错误语义。
+
+当前会主动拒绝以下输入类别：
+
+- 空白输入
+- 超过 `4000` 字符的超长输入
+- 包含异常控制字符或疑似二进制片段的输入
+- 明显脚本/XSS 载荷，例如 `script` 标签、事件处理属性、`javascript:` / `data:text/html`
+- 明显协议探测载荷，例如原始 HTTP 请求行或 header 块
+- 明显注入/路径探测载荷，例如 SQL 注入探针、模板注入片段、`../` 或 `/etc/passwd`
+
+命中安全规则时，接口返回 `422`，并使用统一错误码 `input_security_rejected`。`error.details` 中包含：
+
+- `type: "input_security_violation"`
+- `code: "input_security_rejected"`
+- `reasonCode`
+- `message`
+
+该类请求不会进入正常问答主链路。
+
+可用以下命令验证：
+
+```bash
+cd packages/shared && node --import tsx src/input-security.test.ts
+cd apps/api && node --import tsx src/app.test.ts
+```

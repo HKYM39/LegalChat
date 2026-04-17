@@ -9,13 +9,16 @@ import type {
   AskResponse,
   AuthorityResult,
   ChatRateLimitDetails,
+  InputSecurityViolation,
 } from "shared";
+import { validateUserInputSecurity } from "shared";
 import { create } from "zustand";
 
 import {
   askLegalQuestion,
   ApiError,
   isChatRateLimitDetails,
+  isInputSecurityErrorDetails,
 } from "@/lib/api";
 import {
   consumeChatRateLimit,
@@ -58,6 +61,8 @@ type ChatState = {
   isAsking: boolean;
   // 最近一次请求错误（如有）
   askError: string | null;
+  // 最近一次输入安全拒绝详情
+  inputSecurityViolation: InputSecurityViolation | null;
   // 频率限制详情
   rateLimit: ChatRateLimitDetails | null;
   // 当前选中的法律权威信息（用于侧边栏或详情页展示）
@@ -107,6 +112,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isAsking: false,
   askError: null,
+  inputSecurityViolation: null,
   rateLimit: null,
   selectedAuthority: null,
   suggestedPrompts,
@@ -120,10 +126,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
    * 包含：频率限制检查 -> 本地 UI 状态更新 -> API 调用 -> 处理结果/错误
    */
   async submitQuestion(value) {
-    const nextQuery = (value ?? get().currentInput).trim();
-    if (!nextQuery || get().isAsking) {
+    const rawQuery = value ?? get().currentInput;
+    if (get().isAsking) {
       return;
     }
+
+    const inputSecurity = validateUserInputSecurity(rawQuery);
+    if (!inputSecurity.allowed) {
+      set({
+        askError: inputSecurity.violation.message,
+        inputSecurityViolation: inputSecurity.violation,
+        rateLimit: null,
+      });
+      return;
+    }
+
+    const nextQuery = inputSecurity.normalizedInput;
 
     // 1. 客户端频率限制检查
     const localRateLimit = consumeChatRateLimit();
@@ -131,6 +149,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const rateLimitMessage = createChatRateLimitMessage(localRateLimit.details);
       set({
         askError: rateLimitMessage,
+        inputSecurityViolation: null,
         rateLimit: localRateLimit.details,
       });
       return;
@@ -143,6 +162,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentInput: "",
       isAsking: true,
       askError: null,
+      inputSecurityViolation: null,
       rateLimit: null,
       messages: [...state.messages, userMessage, loadingMessage],
     }));
@@ -160,6 +180,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set((state) => ({
         isAsking: false,
         askError: null,
+        inputSecurityViolation: null,
         rateLimit: null,
         messages: state.messages.map((message) =>
           message.id === loadingMessage.id
@@ -184,14 +205,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isChatRateLimitDetails(error.details)
           ? error.details
           : null;
+      const inputSecurityViolation =
+        error instanceof ApiError && isInputSecurityErrorDetails(error.details)
+          ? error.details
+          : null;
       
-      const resolvedErrorMessage = rateLimitDetails
-        ? createChatRateLimitMessage(rateLimitDetails)
-        : errorMessage;
+      const resolvedErrorMessage = inputSecurityViolation
+        ? inputSecurityViolation.message
+        : rateLimitDetails
+          ? createChatRateLimitMessage(rateLimitDetails)
+          : errorMessage;
 
       set((state) => ({
         isAsking: false,
         askError: resolvedErrorMessage,
+        inputSecurityViolation,
         rateLimit: rateLimitDetails,
         messages: state.messages.map((message) =>
           message.id === loadingMessage.id
@@ -205,16 +233,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   query: nextQuery,
                   normalizedQuery: nextQuery,
                   queryType: "natural_language_query",
-                  answerText: rateLimitDetails
+                  answerText: inputSecurityViolation
+                    ? "该输入已被安全策略拦截，未进入法律检索与模型生成流程。"
+                    : rateLimitDetails
                     ? "This chat request hit the current message limit before research could run."
                     : "I couldn’t complete this legal research request. Please retry after the API service is available.",
                   authorities: [],
                   supportingExcerpts: [],
-                  limitations: rateLimitDetails
+                  limitations: inputSecurityViolation
                     ? [resolvedErrorMessage]
-                    : [
-                        "The backend API request failed before a grounded answer could be generated.",
-                      ],
+                    : rateLimitDetails
+                      ? [resolvedErrorMessage]
+                      : [
+                          "The backend API request failed before a grounded answer could be generated.",
+                        ],
                 },
               }
             : message,
@@ -232,10 +264,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messages: [],
       isAsking: false,
       askError: null,
+      inputSecurityViolation: null,
       rateLimit: null,
       selectedAuthority: null,
       suggestedPrompts,
     });
   },
 }));
-

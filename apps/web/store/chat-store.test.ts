@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
 
+import { INPUT_SECURITY_ERROR_CODE, createInputSecurityViolation } from "shared";
+
 import { clearChatRateLimitState } from "@/lib/chat-rate-limit";
 import { useChatStore } from "./chat-store";
 
@@ -110,8 +112,26 @@ test("chat store blocks submission when local minute rate limit is exceeded", as
   await useChatStore.getState().submitQuestion("Blocked question");
 
   const state = useChatStore.getState();
-  assert.match(state.askError ?? "", /at most 10 messages per minute/i);
+  assert.match(state.askError ?? "", /10\s*条消息|10 messages/i);
   assert.equal(state.messages.length, 0);
+});
+
+test("chat store blocks suspicious input locally and does not call /ask", async () => {
+  let fetchCalled = false;
+  globalThis.fetch = async () => {
+    fetchCalled = true;
+    throw new Error("fetch should not be called for blocked input");
+  };
+
+  await useChatStore
+    .getState()
+    .submitQuestion("<script>alert('xss')</script> summarize this case");
+
+  const state = useChatStore.getState();
+  assert.equal(fetchCalled, false);
+  assert.equal(state.messages.length, 0);
+  assert.equal(state.inputSecurityViolation?.reasonCode, "script_injection_detected");
+  assert.equal(state.askError, state.inputSecurityViolation?.message ?? null);
 });
 
 test("chat store keeps the user message and exposes an error when ask fails", async () => {
@@ -156,8 +176,46 @@ test("chat store surfaces backend rate limit errors with a specific message", as
   await useChatStore.getState().submitQuestion("Explain procedural fairness.");
 
   const state = useChatStore.getState();
-  assert.match(state.askError ?? "", /daily limit of 100 messages/i);
+  assert.match(state.askError ?? "", /100\s*条消息|100 messages/i);
   assert.equal(state.messages.length, 2);
   assert.equal(state.messages[1]?.role, "assistant");
-  assert.match(state.messages[1]?.error ?? "", /daily limit of 100 messages/i);
+  assert.match(state.messages[1]?.error ?? "", /100\s*条消息|100 messages/i);
+});
+
+test("chat store maps backend input security rejection to the shared security message", async () => {
+  const violation = createInputSecurityViolation("protocol_probe_detected");
+
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        error: {
+          code: INPUT_SECURITY_ERROR_CODE,
+          message: violation.message,
+          details: violation,
+        },
+      }),
+      {
+        status: 422,
+        headers: {
+          "content-type": "application/json",
+        },
+      },
+    );
+
+  await useChatStore
+    .getState()
+    .submitQuestion("What is the duty of care analysis?");
+
+  const state = useChatStore.getState();
+  const assistantMessage = state.messages[1];
+  assert.equal(state.inputSecurityViolation?.reasonCode, "protocol_probe_detected");
+  assert.equal(state.askError, violation.message);
+  assert.equal(state.messages.length, 2);
+  assert.equal(assistantMessage?.role, "assistant");
+  assert.equal(
+    assistantMessage?.role === "assistant"
+      ? assistantMessage.response?.limitations[0]
+      : undefined,
+    violation.message,
+  );
 });

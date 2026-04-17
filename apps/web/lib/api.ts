@@ -14,9 +14,11 @@ import type {
   DocumentParagraphsResponse,
   DocumentResponse,
   HealthResponse,
+  InputSecurityViolation,
   SearchRequest,
   SearchResponse,
 } from "shared";
+import { isInputSecurityViolation } from "shared";
 
 /**
  * 接口返回的错误负载结构
@@ -64,6 +66,12 @@ export function isChatRateLimitDetails(
     typeof record.retryAfterSeconds === "number" &&
     typeof record.resetAt === "string"
   );
+}
+
+export function isInputSecurityErrorDetails(
+  value: unknown,
+): value is InputSecurityViolation {
+  return isInputSecurityViolation(value);
 }
 
 /**
