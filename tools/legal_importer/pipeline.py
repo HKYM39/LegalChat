@@ -98,6 +98,8 @@ def is_noise_line(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
         return False
+    if stripped == "AustLII":
+        return True
     if re.fullmatch(r"\d+", stripped):
         return True
     if stripped.startswith("[EMPTY_PAGE_"):
@@ -106,16 +108,18 @@ def is_noise_line(line: str) -> bool:
         return True
     if "https://www.austlii.edu.au/cgi-bin/viewdoc/" in stripped:
         return True
+    if re.fullmatch(r"\d{4}/\d{1,2}/\d{1,2}\s+\d{1,2}:\d{2}", stripped):
+        return True
     if re.search(r"第\s*\d+\s*页\s*共\s*\d+\s*页", stripped):
         return True
     if stripped.startswith("Last Updated:"):
         return True
     if stripped.startswith("Date of Hearing:") and re.fullmatch(
-        r"Date of Hearing:\s+[A-Za-z]+",
+        r"Date of Hearing:\s+[A-Za-z]+(?:\s+\d{4})?",
         stripped,
     ):
         return True
-    if re.fullmatch(r"[A-Z]\s*/", stripped):
+    if re.fullmatch(r"[A-Z]+\s*/", stripped):
         return True
     return False
 
@@ -334,14 +338,15 @@ def ensure_output_dirs(config: PipelineConfig) -> None:
     """确保输出目录存在"""
     config.output_dir.mkdir(parents=True, exist_ok=True)
     config.normalized_dir.mkdir(parents=True, exist_ok=True)
+    config.review_json_dir.mkdir(parents=True, exist_ok=True)
 
 
 def write_document_artifacts(document: NormalizedDocument, config: PipelineConfig) -> None:
     """将标准化后的文档写入 JSON 文件"""
+    payload = json.dumps(document.to_dict(), ensure_ascii=False, indent=2)
     normalized_path = config.normalized_dir / f"{document.id}.json"
-    normalized_path.write_text(
-        json.dumps(document.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    LOGGER.debug("Wrote artifacts for %s", document.source_path)
+    normalized_path.write_text(payload, encoding="utf-8")
 
+    review_json_path = config.review_json_dir / f"{Path(document.source_path).stem}.json"
+    review_json_path.write_text(payload, encoding="utf-8")
+    LOGGER.debug("Wrote artifacts for %s", document.source_path)
